@@ -43,18 +43,11 @@ def parse_history_text(text: str) -> list[dict[str, Any]]:
 
 
 async def fetch_history_html(url: str | None = None) -> str:
-    """历史页多为前端渲染，统一用 Playwright 取正文。"""
-    target = url or settings.history_url
-    from playwright.async_api import async_playwright
+    """历史页多为前端渲染，用同步 Playwright（线程）取正文。"""
+    from app.scrapers.browser import fetch_page_text
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.goto(target, wait_until="domcontentloaded", timeout=90000)
-        await page.wait_for_timeout(3500)
-        text = await page.inner_text("body")
-        await browser.close()
-        return text
+    target = url or settings.history_url
+    return await fetch_page_text(target, wait_ms=3500)
 
 
 async def sync_history(url: str | None = None) -> dict[str, Any]:

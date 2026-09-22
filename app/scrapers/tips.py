@@ -21,16 +21,15 @@ TIP_WEIGHT = {
 
 
 async def _fetch_text_playwright(url: str) -> str:
-    from playwright.async_api import async_playwright
+    from app.scrapers.browser import fetch_page_text
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=90000)
-        await page.wait_for_timeout(2500)
-        text = await page.inner_text("body")
-        await browser.close()
-        return text
+    return await fetch_page_text(url, wait_ms=2500)
+
+
+async def _fetch_frames_concat(url: str) -> str:
+    from app.scrapers.browser import fetch_page_text
+
+    return await fetch_page_text(url, wait_ms=3500, include_frames=True)
 
 
 def _chunks_for_period(text: str, period: int) -> list[str]:
@@ -82,28 +81,8 @@ async def scrape_yanjiuyuan_tips(period: int) -> dict[str, Any]:
             if n > 0:
                 break
         except Exception as exc:
-            used.append(f"{url}#err:{exc}")
+            used.append(f"{url}#err:{type(exc).__name__}:{exc}")
     return {"site": "yanjiuyuan", "saved": total, "urls": used}
-
-
-async def _fetch_frames_concat(url: str) -> str:
-    from playwright.async_api import async_playwright
-
-    parts: list[str] = []
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=90000)
-        await page.wait_for_timeout(3500)
-        for frame in page.frames:
-            try:
-                t = await frame.inner_text("body")
-                if t and len(t.strip()) > 20:
-                    parts.append(t)
-            except Exception:
-                continue
-        await browser.close()
-    return "\n".join(parts)
 
 
 async def scrape_dinggeshui_tips(period: int) -> dict[str, Any]:
@@ -126,7 +105,7 @@ async def scrape_dinggeshui_tips(period: int) -> dict[str, Any]:
             if n > 0:
                 break
         except Exception as exc:
-            used.append(f"{url}#err:{exc}")
+            used.append(f"{url}#err:{type(exc).__name__}:{exc}")
     return {"site": "dinggeshui", "saved": total, "urls": used}
 
 

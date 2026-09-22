@@ -46,11 +46,15 @@ playwright install chromium
 ## 三、启动
 
 ```powershell
+cd e:\GrammarPractice\AiProject\Aomencai
 .\.venv\Scripts\Activate.ps1
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+$env:PYTHONPATH = "e:\GrammarPractice\AiProject\Aomencai"
+uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 浏览器打开：http://127.0.0.1:8000
+
+> 需要热重载时可加 `--reload`；日常用上面命令即可。
 
 ## 四、怎么用
 
@@ -58,18 +62,19 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 2. 首次或每天开奖前，点 **「刷新分析」**：
    - 抓历史开奖 + 最新开奖
    - 抓两站当期推荐文
-   - 重算并只展示 **一个** 最看好生肖
+   - 重算并展示 **包肖** 与 **特码生肖** 各一个最看好
 3. **「仅读库刷新」**：不抓站，只重新加载已有结果。
 4. 也可命令行全量刷新：
 
 ```powershell
+$env:PYTHONPATH = "e:\GrammarPractice\AiProject\Aomencai"
 python -m app.jobs.bootstrap
 ```
 
 ## 五、接口
 
 - `GET /api/health` 健康检查
-- `GET /api/latest-recommend` 最新唯一推荐
+- `GET /api/latest-recommend` 最新包肖 + 特码推荐
 - `GET /api/draws` 最近开奖
 - `POST /api/refresh?full_history=true` 抓取并分析
 

@@ -21,7 +21,7 @@ async def refresh_all(*, full_history: bool = False) -> dict[str, Any]:
             try:
                 summary["history_light"] = await sync_history()
             except Exception as exc:
-                summary["history_light_error"] = str(exc)
+                summary["history_light_error"] = f"{type(exc).__name__}: {exc}"
 
         draw = latest_draw()
         if not draw:

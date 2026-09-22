@@ -43,7 +43,7 @@ async def refresh(full_history: bool = True):
         result = await refresh_all(full_history=full_history)
         return result
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
 
 
 @router.post("/rescore")

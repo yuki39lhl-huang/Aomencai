@@ -149,7 +149,6 @@ def _score_one(
         "hit_rule": hit_rule,
         "zodiac": winner,
         "score": round(totals[winner], 4),
-        "winner_detail": detail_per[winner],
         "score_detail": store_detail,
     }
 

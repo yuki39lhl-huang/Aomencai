@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>澳门彩生肖助手</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <p class="brand">Aomencai</p>
+      <h1>本期最看好</h1>
+      <p class="sub">本地娱乐分析 · 包肖与特码分开展示 · 各给一个生肖</p>
+      <p id="periodMeta" class="meta">尚未分析</p>
+
+      <div class="dual">
+        <div class="pick">
+          <p class="pick-label">包肖</p>
+          <p class="pick-rule">7码任一开出该肖即中</p>
+          <div id="zodiacBao" class="zodiac">—</div>
+          <p id="metaBao" class="pick-meta"></p>
+        </div>
+        <div class="pick">
+          <p class="pick-label">特码生肖</p>
+          <p class="pick-rule">仅特码开出该肖才中</p>
+          <div id="zodiacTema" class="zodiac tema">—</div>
+          <p id="metaTema" class="pick-meta"></p>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btnRefresh" type="button">刷新分析</button>
+        <button id="btnReload" class="ghost" type="button">仅读库刷新</button>
+      </div>
+      <p id="status" class="status"></p>
+    </header>
+
+    <section class="block">
+      <h2>包肖 · 打分理由</h2>
+      <ul id="reasonsBao" class="reasons"></ul>
+      <pre id="detailBao" class="detail"></pre>
+    </section>
+
+    <section class="block">
+      <h2>特码生肖 · 打分理由</h2>
+      <ul id="reasonsTema" class="reasons"></ul>
+      <pre id="detailTema" class="detail"></pre>
+    </section>
+
+    <section class="block">
+      <h2>最近开奖</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>期号</th>
+              <th>日期</th>
+              <th>平码</th>
+              <th>特码</th>
+              <th>特码生肖</th>
+            </tr>
+          </thead>
+          <tbody id="drawsBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <strong>包肖</strong>：6个平码+1个特码里，任意一个号码是该生肖即算命中。<br />
+      <strong>特码生肖</strong>：只有特码对应生肖才算命中。开奖近似随机，仅供娱乐参考。
+    </footer>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

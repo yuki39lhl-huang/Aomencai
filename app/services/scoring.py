@@ -77,6 +77,7 @@ def _score_one(
     history: list[dict[str, Any]],
     tip_raw: dict[str, float],
     tip_count: int,
+    site_weights: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     if play_type == "bao_xiao":
         omit = _omit_bao(history)
@@ -131,6 +132,7 @@ def _score_one(
             "tip": settings.weight_tip,
             "hot_window": settings.hot_window,
         },
+        "site_weights": site_weights or {},
         "winner_detail": detail_per[winner],
         "tip_count": tip_count,
         "history_count": len(history),
@@ -138,7 +140,7 @@ def _score_one(
         "reasons": [
             reason_omit.format(n=omit[winner]),
             reason_hot.format(w=settings.hot_window, n=hot[winner]),
-            f"站点推荐加权分 {round(tip_raw[winner], 4)}（共{tip_count}条）",
+            f"站点推荐加权分 {round(tip_raw[winner], 4)}（共{tip_count}条，玩法={mode_label}）",
         ],
     }
     upsert_recommend(target_period, play_type, winner, totals[winner], store_detail)
@@ -155,6 +157,8 @@ def _score_one(
 
 def score_for_period(target_period: int) -> dict[str, Any]:
     """同时计算包肖 + 特码生肖两套推荐。"""
+    from app.services.reconcile import site_weights_for_period
+
     draws = list_draws_asc()
     if not draws:
         raise ValueError("暂无开奖数据，请先刷新抓取历史")
@@ -165,29 +169,39 @@ def score_for_period(target_period: int) -> dict[str, Any]:
         history = draws
 
     tips = list_tips(target_period)
-    tip_raw = tip_scores_for_period(target_period, tips)
+    bao_site_w = site_weights_for_period("bao_xiao", target_period)
+    tema_site_w = site_weights_for_period("te_ma", target_period)
+    tip_raw_bao = tip_scores_for_period(
+        target_period, tips, play_type="bao_xiao", site_weights=bao_site_w
+    )
+    tip_raw_tema = tip_scores_for_period(
+        target_period, tips, play_type="te_ma", site_weights=tema_site_w
+    )
 
     bao = _score_one(
         play_type="bao_xiao",
         target_period=target_period,
         latest=latest,
         history=history,
-        tip_raw=tip_raw,
+        tip_raw=tip_raw_bao,
         tip_count=len(tips),
+        site_weights=bao_site_w,
     )
     tema = _score_one(
         play_type="te_ma",
         target_period=target_period,
         latest=latest,
         history=history,
-        tip_raw=tip_raw,
+        tip_raw=tip_raw_tema,
         tip_count=len(tips),
+        site_weights=tema_site_w,
     )
     return {
         "period": target_period,
         "based_on_latest_draw": latest,
         "bao_xiao": bao,
         "te_ma": tema,
+        "site_weights": {"bao_xiao": bao_site_w, "te_ma": tema_site_w},
     }
 
 

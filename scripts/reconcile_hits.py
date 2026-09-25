@@ -1,39 +1,26 @@
-from app.config import settings
-from app.db import db_cursor
-from app.services.zodiac import bao_xiao_hit
+"""手动对账：系统推荐 + 站点 tip 命中。"""
+from app.services.reconcile import hit_summary, reconcile_pending, site_weights_for_period
+from app.repositories import latest_draw
 
-with db_cursor() as cur:
-    cur.execute(
-        "SELECT period, play_type, zodiac, score, created_at "
-        "FROM recommend_log ORDER BY period DESC, play_type LIMIT 40"
-    )
-    recs = cur.fetchall()
-    cur.execute(
-        "SELECT period, n1,n2,n3,n4,n5,n6, special, special_zodiac, draw_date "
-        "FROM draw_result ORDER BY period DESC LIMIT 15"
-    )
-    draws = cur.fetchall()
 
-draw_map = {d["period"]: d for d in draws}
-print("=== 最近开奖 ===")
-for d in draws[:10]:
-    print(d["period"], d["draw_date"], "特", d["special"], d["special_zodiac"])
+def main() -> None:
+    result = reconcile_pending()
+    print("=== 对账完成 ===")
+    print("recommend periods:", result["recommend_periods"])
+    print("site periods:", result["site_periods"])
+    for row in result["recommend"]:
+        flag = "中" if row["hit"] else "否"
+        print(f"  {row['period']} {row['play_type']} 荐{row['zodiac']} -> {flag}")
 
-by: dict = {}
-for r in recs:
-    by.setdefault(r["period"], {})[r["play_type"]] = r
+    draw = latest_draw()
+    period = int(draw["period"]) + 1 if draw else 1
+    print("=== 命中汇总 ===")
+    print(hit_summary(limit=12))
+    print("=== 站点权重(包肖) ===")
+    print(site_weights_for_period("bao_xiao", period))
+    print("=== 站点权重(特码) ===")
+    print(site_weights_for_period("te_ma", period))
 
-print("=== 推荐对账 ===")
-for p in sorted(by.keys()):
-    d = draw_map.get(p)
-    bao = (by[p].get("bao_xiao") or {}).get("zodiac")
-    tema = (by[p].get("te_ma") or {}).get("zodiac")
-    if not d:
-        print(f"{p} 未开奖 包肖={bao} 特码={tema}")
-        continue
-    bao_hit = bao_xiao_hit(bao, d, settings.lunar_year) if bao else False
-    tema_hit = tema == d["special_zodiac"] if tema else False
-    print(
-        f"{p} 包肖荐{bao}->{'中' if bao_hit else '否'} | "
-        f"特码荐{tema}/实开{d['special_zodiac']}->{'中' if tema_hit else '否'}"
-    )
+
+if __name__ == "__main__":
+    main()

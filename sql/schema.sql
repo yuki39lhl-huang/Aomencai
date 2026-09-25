@@ -43,10 +43,25 @@ CREATE TABLE IF NOT EXISTS recommend_log (
   zodiac VARCHAR(8) NOT NULL COMMENT '该玩法最看好生肖',
   score DECIMAL(10, 4) NOT NULL COMMENT '综合得分',
   score_detail JSON NOT NULL COMMENT '分项得分详情JSON',
+  hit TINYINT NULL DEFAULT NULL COMMENT '对账：NULL未开奖 1中 0否',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '生成时间',
   PRIMARY KEY (id),
   UNIQUE KEY uk_period_play (period, play_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='每期推荐快照（包肖/特码分行）';
+
+CREATE TABLE IF NOT EXISTS site_tip_hit (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  period INT UNSIGNED NOT NULL COMMENT '期号',
+  site_code VARCHAR(32) NOT NULL COMMENT '站点编码',
+  play_type VARCHAR(16) NOT NULL COMMENT '玩法：bao_xiao / te_ma',
+  hit TINYINT NOT NULL COMMENT '1中 0否',
+  primary_zodiacs JSON NULL COMMENT '该站当期主推生肖',
+  tip_type VARCHAR(32) NULL COMMENT '主推类型',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '对账时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_period_site_play (period, site_code, play_type),
+  KEY idx_site_play_period (site_code, play_type, period)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='站点推荐按玩法对账';
 
 CREATE TABLE IF NOT EXISTS scrape_run (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',

@@ -5,6 +5,11 @@ from typing import Any
 from app.repositories import finish_scrape_run, latest_draw, start_scrape_run
 from app.scrapers.history import sync_history, sync_live_data
 from app.scrapers.tips import sync_tips
+from app.services.reconcile import (
+    reconcile_pending,
+    reconcile_recommend_period,
+    reconcile_site_tips_period,
+)
 from app.services.scoring import score_for_period
 
 
@@ -27,8 +32,16 @@ async def refresh_all(*, full_history: bool = False) -> dict[str, Any]:
         if not draw:
             raise RuntimeError("未获取到开奖数据")
 
+        # 开奖入库后先对账已开期，再抓下期 tip / 打分（降权用历史命中）
+        summary["reconcile"] = reconcile_pending()
+        latest_period = int(draw["period"])
+        summary["reconcile_latest"] = {
+            "recommend": reconcile_recommend_period(latest_period),
+            "site_tips": reconcile_site_tips_period(latest_period),
+        }
+
         # 默认预测「最新已开奖期 + 1」；live 未开奖时 waiting_period 就是当期
-        target_period = int(draw["period"]) + 1
+        target_period = latest_period + 1
         if live:
             if live.get("drawn") and live.get("next_period"):
                 target_period = int(live["next_period"])

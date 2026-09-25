@@ -35,6 +35,23 @@ function fillPick(prefix, row) {
   detailEl.textContent = JSON.stringify(detail, null, 2);
 }
 
+function renderHits(payload) {
+  const summaryEl = document.getElementById("hitSummary");
+  const detailEl = document.getElementById("hitDetail");
+  const hits = payload.hits || {};
+  const by = hits.by_play || {};
+  const bao = by.bao_xiao || {};
+  const tema = by.te_ma || {};
+  summaryEl.textContent =
+    `系统推荐：包肖 ${bao.hit || 0}中/${bao.miss || 0}否 · 特码 ${tema.hit || 0}中/${tema.miss || 0}否` +
+    (bao.pending || tema.pending ? `（待开奖 ${ (bao.pending || 0) + (tema.pending || 0) }）` : "");
+  detailEl.textContent = JSON.stringify(
+    { site_weights: payload.site_weights || {}, recent: hits.items || [] },
+    null,
+    2
+  );
+}
+
 function renderRecommend(payload) {
   const rec = payload.recommend;
   const draw = payload.latest_draw;
@@ -44,6 +61,7 @@ function renderRecommend(payload) {
     metaEl.textContent = "尚未分析，请点击「刷新分析」";
     fillPick("Bao", null);
     fillPick("Tema", null);
+    renderHits(payload);
     return;
   }
 
@@ -54,6 +72,7 @@ function renderRecommend(payload) {
 
   fillPick("Bao", rec.bao_xiao);
   fillPick("Tema", rec.te_ma);
+  renderHits(payload);
 }
 
 function renderDraws(items) {

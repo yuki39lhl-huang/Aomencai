@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from app.db import ping_db
 from app.jobs.pipeline import refresh_all
 from app.repositories import latest_draw, latest_scrape_run, list_draws
+from app.services.reconcile import hit_summary, reconcile_pending, site_weights_for_period
 from app.services.scoring import latest_recommendation, score_for_period
 
 router = APIRouter(prefix="/api")
@@ -30,11 +31,38 @@ def latest_recommend_api():
     rec = latest_recommendation()
     draw = latest_draw()
     run = latest_scrape_run()
+    period = (rec or {}).get("period") or (int(draw["period"]) + 1 if draw else None)
+    weights = None
+    if period:
+        weights = {
+            "bao_xiao": site_weights_for_period("bao_xiao", int(period)),
+            "te_ma": site_weights_for_period("te_ma", int(period)),
+        }
     return {
         "recommend": rec,
         "latest_draw": draw,
         "scrape_run": run,
+        "site_weights": weights,
+        "hits": hit_summary(limit=12),
     }
+
+
+@router.get("/hit-stats")
+def hit_stats_api():
+    draw = latest_draw()
+    period = int(draw["period"]) + 1 if draw else 1
+    return {
+        "hits": hit_summary(limit=24),
+        "site_weights": {
+            "bao_xiao": site_weights_for_period("bao_xiao", period),
+            "te_ma": site_weights_for_period("te_ma", period),
+        },
+    }
+
+
+@router.post("/reconcile")
+def reconcile_api():
+    return reconcile_pending()
 
 
 @router.post("/refresh")

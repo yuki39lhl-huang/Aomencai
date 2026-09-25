@@ -173,13 +173,148 @@ def get_recommends_for_period(period: int) -> list[dict[str, Any]]:
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT period, play_type, zodiac, score, score_detail, created_at
+            SELECT period, play_type, zodiac, score, score_detail, hit, created_at
             FROM recommend_log
             WHERE period=%s
             """,
             (period,),
         )
         return [_parse_recommend_row(r) for r in cur.fetchall()]  # type: ignore[misc]
+
+
+def list_recommends_pending_hit() -> list[dict[str, Any]]:
+    """已有开奖、但 hit 仍为空的推荐行。"""
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT r.period, r.play_type, r.zodiac, r.hit
+            FROM recommend_log r
+            INNER JOIN draw_result d ON d.period = r.period
+            WHERE r.hit IS NULL
+            ORDER BY r.period ASC
+            """
+        )
+        return list(cur.fetchall())
+
+
+def update_recommend_hit(period: int, play_type: str, hit: bool) -> None:
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE recommend_log
+            SET hit=%s
+            WHERE period=%s AND play_type=%s
+            """,
+            (1 if hit else 0, period, play_type),
+        )
+
+
+def get_draw(period: int) -> dict[str, Any] | None:
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT period, draw_date, n1, n2, n3, n4, n5, n6, special, special_zodiac, source
+            FROM draw_result
+            WHERE period=%s
+            """,
+            (period,),
+        )
+        return cur.fetchone()
+
+
+def list_tip_periods_for_site_hits() -> list[int]:
+    """有 tip 且已开奖、但尚未写入 site_tip_hit（任一玩法）的期号。"""
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT t.period
+            FROM site_tip t
+            INNER JOIN draw_result d ON d.period = t.period
+            WHERE NOT EXISTS (
+              SELECT 1 FROM site_tip_hit h
+              WHERE h.period = t.period
+            )
+            ORDER BY t.period ASC
+            """
+        )
+        return [int(r["period"]) for r in cur.fetchall()]
+
+
+def upsert_site_tip_hit(
+    *,
+    period: int,
+    site_code: str,
+    play_type: str,
+    hit: bool,
+    primary_zodiacs: list[str],
+    tip_type: str | None,
+) -> None:
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO site_tip_hit
+              (period, site_code, play_type, hit, primary_zodiacs, tip_type)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+              hit=VALUES(hit),
+              primary_zodiacs=VALUES(primary_zodiacs),
+              tip_type=VALUES(tip_type),
+              created_at=CURRENT_TIMESTAMP
+            """,
+            (
+                period,
+                site_code,
+                play_type,
+                1 if hit else 0,
+                json.dumps(primary_zodiacs, ensure_ascii=False),
+                tip_type,
+            ),
+        )
+
+
+def site_hit_stats(
+    play_type: str, *, before_period: int, window: int
+) -> dict[str, dict[str, int]]:
+    """各站在 before_period 之前近 window 期的命中统计。"""
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT site_code, period, hit
+            FROM site_tip_hit
+            WHERE play_type=%s AND period < %s
+            ORDER BY period DESC
+            LIMIT %s
+            """,
+            (play_type, before_period, max(window * 30, 200)),
+        )
+        rows = list(cur.fetchall())
+    per_site: dict[str, list[int]] = {}
+    for r in rows:
+        code = r["site_code"]
+        bucket = per_site.setdefault(code, [])
+        if len(bucket) >= window:
+            continue
+        bucket.append(int(r["hit"]))
+    return {
+        code: {"hits": sum(vals), "total": len(vals)}
+        for code, vals in per_site.items()
+    }
+
+
+def list_recent_recommend_hits(limit: int = 20) -> list[dict[str, Any]]:
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT r.period, r.play_type, r.zodiac, r.hit, r.score,
+                   d.special_zodiac, d.special
+            FROM recommend_log r
+            LEFT JOIN draw_result d ON d.period = r.period
+            ORDER BY r.period DESC, r.play_type
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return list(cur.fetchall())
 
 
 def latest_recommend_period() -> int | None:

@@ -74,7 +74,8 @@ $env:PYTHONPATH = "e:\GrammarPractice\AiProject\Aomencai"
 1. 打开面板后，默认**只读数据库**（不会每次自动狂抓网站）。
 2. 首次或每天开奖前，点 **「刷新分析」**：
    - 抓历史开奖 + 最新开奖
-   - 抓两站当期推荐文
+   - **自动对账**已开期推荐 / 各站 tip 命中
+   - 抓站点当期推荐文（包肖与特码分开加权，差站降权）
    - 重算并展示 **包肖** 与 **特码生肖** 各一个最看好
 3. **「仅读库刷新」**：不抓站，只重新加载已有结果。
 4. 也可命令行全量刷新：
@@ -84,14 +85,23 @@ $env:PYTHONPATH = "e:\GrammarPractice\AiProject\Aomencai"
 python -m app.jobs.bootstrap
 ```
 
+升级命中跟踪（已有库补字段）：
+
+```powershell
+python -m scripts.migrate_hit_tracking
+python -m scripts.reconcile_hits
+```
+
 ## 五、接口
 
 - `GET /api/health` 健康检查
-- `GET /api/latest-recommend` 最新包肖 + 特码推荐
+- `GET /api/latest-recommend` 最新包肖 + 特码推荐（含命中汇总、站点权重）
+- `GET /api/hit-stats` 对账与站点权重
+- `POST /api/reconcile` 手动回填对账
 - `GET /api/draws` 最近开奖
 - `POST /api/refresh?full_history=true` 抓取并分析
 
 ## 说明
 
 - 表结构固定；开奖/推荐/推荐结果是动态数据。
-- 「站点历史命中率回测」留作升级项，第一版未做。
+- 站点权重按近 N 期相对期望命中率缩放（样本少时接近 1，不剧烈抖动）。

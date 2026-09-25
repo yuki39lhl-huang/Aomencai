@@ -6,6 +6,9 @@
 > **特码生肖**：只有特码是该生肖才算中。  
 > 开奖近似随机，网站推荐可信度低。本工具不承诺盈利，请理性使用。
 
+站点列表与开关：[`app/sites.py`](app/sites.py)（含旧站 + `网站.md` 新站）。  
+探测备注：[`网站.md`](网站.md)。
+
 ## 环境
 
 - Python 3.10+
@@ -45,11 +48,21 @@ playwright install chromium
 
 ## 三、启动
 
+在**项目根目录**执行（不要停在 `.venv\Scripts` 里直接敲 `uvicorn`）：
+
 ```powershell
 cd e:\GrammarPractice\AiProject\Aomencai
 .\.venv\Scripts\Activate.ps1
 $env:PYTHONPATH = "e:\GrammarPractice\AiProject\Aomencai"
 uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+若未激活 venv、人在 `Scripts` 目录，需写成：
+
+```powershell
+cd e:\GrammarPractice\AiProject\Aomencai
+$env:PYTHONPATH = "e:\GrammarPractice\AiProject\Aomencai"
+.\.venv\Scripts\uvicorn.exe app.main:app --host 127.0.0.1 --port 8000
 ```
 
 浏览器打开：http://127.0.0.1:8000

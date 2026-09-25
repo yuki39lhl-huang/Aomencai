@@ -27,9 +27,13 @@ async def refresh_all(*, full_history: bool = False) -> dict[str, Any]:
         if not draw:
             raise RuntimeError("未获取到开奖数据")
 
+        # 默认预测「最新已开奖期 + 1」；live 未开奖时 waiting_period 就是当期
         target_period = int(draw["period"]) + 1
-        if live and live.get("next_period"):
-            target_period = int(live["next_period"])
+        if live:
+            if live.get("drawn") and live.get("next_period"):
+                target_period = int(live["next_period"])
+            elif live.get("waiting_period"):
+                target_period = int(live["waiting_period"])
 
         summary["tips"] = await sync_tips(target_period)
         summary["recommend"] = score_for_period(target_period)

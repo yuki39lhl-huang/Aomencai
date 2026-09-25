@@ -65,34 +65,63 @@ async def sync_history(url: str | None = None) -> dict[str, Any]:
     return {"count": len(rows), "max_period": max((r["period"] for r in rows), default=None)}
 
 
+def _parse_live_payload(k: str) -> dict[str, Any] | None:
+    """解析 data.txt 的 k 字段。
+
+    已开奖示例: 264,10,06,08,31,22,24,21,265,09,22,二,21点32分
+    未开奖占位: 265,K,J,③,④,⑤,开,奖,266,09,23,三,21点32分
+    """
+    parts = [x.strip() for x in k.split(",") if x.strip()]
+    if len(parts) < 8:
+        return None
+    if not parts[0].isdigit():
+        return None
+    period = int(parts[0])
+    ball_parts = parts[1:8]
+    if all(p.isdigit() for p in ball_parts):
+        nums = [int(p) for p in ball_parts]
+        plains, special = nums[:6], nums[6]
+        next_period = int(parts[8]) if len(parts) > 8 and parts[8].isdigit() else period + 1
+        return {
+            "drawn": True,
+            "period": period,
+            "numbers": plains,
+            "special": special,
+            "special_zodiac": number_to_zodiac(special, settings.lunar_year),
+            "next_period": next_period,
+            "waiting_period": next_period,
+            "raw": k,
+        }
+    # 未开奖：第一部分是当期期号，后面是占位符
+    waiting = period
+    return {
+        "drawn": False,
+        "period": None,
+        "numbers": None,
+        "special": None,
+        "special_zodiac": None,
+        "next_period": waiting,
+        "waiting_period": waiting,
+        "raw": k,
+    }
+
+
 async def sync_live_data() -> dict[str, Any] | None:
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, verify=False) as client:
         resp = await client.get(settings.live_data_url)
         resp.raise_for_status()
         data = resp.json()
     k = str(data.get("k", ""))
-    parts = [x.strip() for x in k.split(",") if x.strip()]
-    # 例: 264,10,06,08,31,22,24,21,265,09,22,二,21点32分
-    if len(parts) < 8:
+    parsed = _parse_live_payload(k)
+    if not parsed:
         return None
-    period = int(parts[0])
-    nums = [int(x) for x in parts[1:8]]
-    plains, special = nums[:6], nums[6]
-    zodiac = number_to_zodiac(special, settings.lunar_year)
-    upsert_draw(
-        period=period,
-        draw_date=datetime.now().date(),
-        numbers=plains,
-        special=special,
-        special_zodiac=zodiac,
-        source="live",
-    )
-    next_period = int(parts[8]) if len(parts) > 8 and parts[8].isdigit() else period + 1
-    return {
-        "period": period,
-        "numbers": plains,
-        "special": special,
-        "special_zodiac": zodiac,
-        "next_period": next_period,
-        "raw": k,
-    }
+    if parsed["drawn"]:
+        upsert_draw(
+            period=parsed["period"],
+            draw_date=datetime.now().date(),
+            numbers=parsed["numbers"],
+            special=parsed["special"],
+            special_zodiac=parsed["special_zodiac"],
+            source="live",
+        )
+    return parsed

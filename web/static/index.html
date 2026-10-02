@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>澳门彩生肖助手</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=4" />
 </head>
 <body>
   <div class="page">
@@ -35,6 +35,27 @@
       </div>
       <p id="status" class="status"></p>
     </header>
+
+    <section class="block" id="manualHit" hidden>
+      <h2>开奖后录入中没中</h2>
+      <p id="manualMeta" class="meta"></p>
+      <div class="dual hit-choices">
+        <fieldset class="hit-field">
+          <legend>包肖</legend>
+          <label><input type="radio" name="baoHit" value="1" /> 中</label>
+          <label><input type="radio" name="baoHit" value="0" /> 没中</label>
+        </fieldset>
+        <fieldset class="hit-field">
+          <legend>特码</legend>
+          <label><input type="radio" name="temaHit" value="1" /> 中</label>
+          <label><input type="radio" name="temaHit" value="0" /> 没中</label>
+        </fieldset>
+      </div>
+      <div class="actions">
+        <button id="btnManualHit" type="button">写入中没中</button>
+      </div>
+      <p class="hint">同一期只保留最新一次。写入后记入面板上的中/否战绩，刷新分析不会再改你手填的结果。</p>
+    </section>
 
     <section class="block">
       <h2>包肖 · 打分理由</h2>
@@ -77,6 +98,16 @@
       <strong>特码生肖</strong>：只有特码对应生肖才算命中。开奖近似随机，仅供娱乐参考。
     </footer>
   </div>
-  <script src="/static/app.js"></script>
+  <div id="notice" class="notice" hidden>
+    <div class="notice-card" role="dialog" aria-modal="true">
+      <h3 id="noticeTitle"></h3>
+      <p id="noticeText"></p>
+      <div class="actions">
+        <button id="noticeOk" type="button">确定</button>
+        <button id="noticeCancel" class="ghost" type="button" hidden>取消</button>
+      </div>
+    </div>
+  </div>
+  <script src="/static/app.js?v=5"></script>
 </body>
 </html>

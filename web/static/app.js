@@ -52,6 +52,73 @@ function renderHits(payload) {
   );
 }
 
+let settlePeriod = null;
+let settleRecorded = null;
+
+function hitWord(hit) {
+  if (hit === null || hit === undefined) return "未录入";
+  return hit ? "中" : "没中";
+}
+
+function askNotice({ title, text, okText, cancelText }) {
+  return new Promise((resolve) => {
+    const root = document.getElementById("notice");
+    const ok = document.getElementById("noticeOk");
+    const cancel = document.getElementById("noticeCancel");
+    document.getElementById("noticeTitle").textContent = title;
+    document.getElementById("noticeText").textContent = text;
+    ok.textContent = okText || "确定";
+    cancel.hidden = !cancelText;
+    if (cancelText) cancel.textContent = cancelText;
+    root.hidden = false;
+    const finish = (value) => {
+      root.hidden = true;
+      ok.onclick = null;
+      cancel.onclick = null;
+      resolve(value);
+    };
+    ok.onclick = () => finish(true);
+    cancel.onclick = () => finish(false);
+  });
+}
+
+function setHitRadios(name, hit) {
+  const wanted = hit === null || hit === undefined ? null : hit ? "1" : "0";
+  document.querySelectorAll(`input[name="${name}"]`).forEach((el) => {
+    el.checked = wanted !== null && el.value === wanted;
+  });
+}
+
+function renderManual(payload) {
+  const box = document.getElementById("manualHit");
+  const settle = payload.settle;
+  if (!settle || (!settle.bao_xiao && !settle.te_ma)) {
+    box.hidden = true;
+    settlePeriod = null;
+    settleRecorded = null;
+    return;
+  }
+  box.hidden = false;
+  settlePeriod = settle.period;
+  const bao = settle.bao_xiao;
+  const tema = settle.te_ma;
+  settleRecorded = {
+    bao: bao ? bao.hit : null,
+    tema: tema ? tema.hit : null,
+  };
+  const state = settle.drawn ? "已开奖" : "待开奖";
+  document.getElementById("manualMeta").textContent =
+    `${settle.period}期${state} · 包肖荐 ${bao ? bao.zodiac : "—"} · 特码荐 ${tema ? tema.zodiac : "—"}`;
+  setHitRadios("baoHit", bao ? bao.hit : null);
+  setHitRadios("temaHit", tema ? tema.hit : null);
+}
+
+function selectedHit(name) {
+  const el = document.querySelector(`input[name="${name}"]:checked`);
+  if (!el) return null;
+  return el.value === "1";
+}
+
 function renderRecommend(payload) {
   const rec = payload.recommend;
   const draw = payload.latest_draw;
@@ -62,6 +129,7 @@ function renderRecommend(payload) {
     fillPick("Bao", null);
     fillPick("Tema", null);
     renderHits(payload);
+    renderManual(payload);
     return;
   }
 
@@ -73,6 +141,7 @@ function renderRecommend(payload) {
   fillPick("Bao", rec.bao_xiao);
   fillPick("Tema", rec.te_ma);
   renderHits(payload);
+  renderManual(payload);
 }
 
 function renderDraws(items) {
@@ -108,7 +177,9 @@ async function doRefresh() {
     const result = await fetchJSON("/api/refresh?full_history=true", { method: "POST" });
     const bao = result.recommend.bao_xiao.zodiac;
     const tema = result.recommend.te_ma.zodiac;
-    setStatus(`完成：${result.recommend.period}期 包肖「${bao}」/ 特码「${tema}」`);
+    const historyDown = result.history_error || result.history_light_error;
+    const extra = historyDown ? "（历史页暂时连不上，已用最新开奖继续）" : "";
+    setStatus(`完成：${result.recommend.period}期 包肖「${bao}」/ 特码「${tema}」${extra}`);
     await loadPanel();
   } catch (err) {
     setStatus(String(err.message || err), true);
@@ -116,6 +187,55 @@ async function doRefresh() {
     btn.disabled = false;
   }
 }
+
+document.getElementById("btnManualHit").addEventListener("click", async () => {
+  const btn = document.getElementById("btnManualHit");
+  const bao = selectedHit("baoHit");
+  const tema = selectedHit("temaHit");
+  if (settlePeriod == null) {
+    setStatus("没有可录入的已开奖期", true);
+    return;
+  }
+  if (bao === null || tema === null) {
+    setStatus("请先选择包肖和特码是中还是没中", true);
+    return;
+  }
+  const recorded =
+    settleRecorded &&
+    (settleRecorded.bao !== null || settleRecorded.tema !== null);
+  if (recorded) {
+    const replace = await askNotice({
+      title: "本期已经录入过",
+      text: `${settlePeriod}期已有记录：包肖${hitWord(settleRecorded.bao)}，特码${hitWord(settleRecorded.tema)}。\n是否用这次的结果替换？替换后只保留最新一次。`,
+      okText: "替换",
+      cancelText: "取消",
+    });
+    if (!replace) {
+      setStatus(`${settlePeriod}期未替换，仍保留上次录入`);
+      return;
+    }
+  }
+  btn.disabled = true;
+  try {
+    await fetchJSON("/api/manual-hit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ period: settlePeriod, bao_xiao: bao, te_ma: tema }),
+    });
+    const summary = `${settlePeriod}期：包肖${bao ? "中" : "没中"}，特码${tema ? "中" : "没中"}`;
+    setStatus(recorded ? `已替换 ${summary}` : `写入成功 ${summary}`);
+    await loadPanel();
+    await askNotice({
+      title: "写入成功",
+      text: recorded ? `${summary}\n已替换该期之前的录入。` : summary,
+      okText: "知道了",
+    });
+  } catch (err) {
+    setStatus(String(err.message || err), true);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 document.getElementById("btnRefresh").addEventListener("click", doRefresh);
 document.getElementById("btnReload").addEventListener("click", async () => {

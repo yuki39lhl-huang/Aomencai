@@ -13,20 +13,21 @@ from app.services.reconcile import (
 from app.services.scoring import score_for_period
 
 
+async def _sync_history_safe(summary: dict[str, Any], key: str) -> None:
+    """历史页经常断连；失败只记下来，不中断实时开奖和后续打分。"""
+    try:
+        summary[key] = await sync_history()
+    except Exception as exc:
+        summary[f"{key}_error"] = f"{type(exc).__name__}: {exc}"
+
+
 async def refresh_all(*, full_history: bool = False) -> dict[str, Any]:
     run_id = start_scrape_run("bootstrap" if full_history else "refresh")
     summary: dict[str, Any] = {"full_history": full_history}
     try:
-        if full_history:
-            summary["history"] = await sync_history()
         live = await sync_live_data()
         summary["live"] = live
-
-        if not full_history:
-            try:
-                summary["history_light"] = await sync_history()
-            except Exception as exc:
-                summary["history_light_error"] = f"{type(exc).__name__}: {exc}"
+        await _sync_history_safe(summary, "history" if full_history else "history_light")
 
         draw = latest_draw()
         if not draw:

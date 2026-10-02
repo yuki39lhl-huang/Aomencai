@@ -97,7 +97,8 @@ python -m scripts.reconcile_hits
 - `GET /api/health` 健康检查
 - `GET /api/latest-recommend` 最新包肖 + 特码推荐（含命中汇总、站点权重）
 - `GET /api/hit-stats` 对账与站点权重
-- `POST /api/reconcile` 手动回填对账
+- `POST /api/manual-hit` 开奖后手动写入包肖/特码中没中（已写入的不会被自动对账覆盖）
+- `POST /api/reconcile` 仅回填尚未录入的对账
 - `GET /api/draws` 最近开奖
 - `POST /api/refresh?full_history=true` 抓取并分析
 

@@ -4,7 +4,7 @@ import re
 from typing import Any
 
 from app.repositories import delete_tips_for_period, insert_site_tip
-from app.services.zodiac import ZODIAC_ORDER, extract_zodiacs_from_text, tip_type_from_text
+from app.services.zodiac import ZODIAC_ORDER
 from app.sites import TipSite, all_tip_fetch_urls, enabled_tip_sites
 
 TIP_WEIGHT = {
@@ -19,11 +19,10 @@ TIP_WEIGHT = {
     "九肖": 0.2,
 }
 
-SIGNAL_HINT = re.compile(r"(生肖|特码|一肖|二肖|三肖|四肖|五肖|六肖|七肖|八肖|九肖|平特)")
-TIP_LINE_RE = re.compile(
-    r"(?P<label>[一二三四五六七八九]肖)[^鼠牛虎兔龙蛇马羊猴鸡狗猪]{0,12}"
-    r"(?P<body>[鼠牛虎兔龙蛇马羊猴鸡狗猪]+(?:[^鼠牛虎兔龙蛇马羊猴鸡狗猪]{0,4}[鼠牛虎兔龙蛇马羊猴鸡狗猪]+)*)"
-)
+_XIAO_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_ZODIAC_CHARS = set("鼠牛虎兔龙蛇马羊猴鸡狗猪")
+_LABEL_RE = re.compile(r"([一二三四五六七八九])肖")
+_TEMA_MIN_SITES = 2
 
 
 def _chunks_for_period(text: str, period: int) -> list[str]:
@@ -31,106 +30,194 @@ def _chunks_for_period(text: str, period: int) -> list[str]:
     return [m.group(0).strip() for m in pattern.finditer(text) if m.group(0).strip()]
 
 
-def _extract_period_chunks(text: str, period: int) -> list[dict[str, Any]]:
-    """策略 A：按当期期号切段。"""
+def _scope_for_period(text: str, period: int) -> str:
+    """只看当期期号后面的段落，避免把别的期或整页广告算进来。"""
     chunks = _chunks_for_period(text, period)
-    if not chunks and (str(period) in text or f"{period}期" in text):
-        chunks = [text[:4000]]
-    out: list[dict[str, Any]] = []
-    for chunk in chunks[:12]:
-        zodiacs = extract_zodiacs_from_text(chunk)
-        if not zodiacs:
+    if chunks:
+        return "\n".join(chunks[:12])
+    idx = text.find(f"{period}期")
+    if idx < 0:
+        return ""
+    return text[idx : idx + 4000]
+
+
+def _is_sep(ch: str) -> bool:
+    if ch.isspace() or ch.isascii():
+        return True
+    if ch in "〖〗【】[]()（）:：、，,。·.✔㊣+*/|_-—~～!！?？\"'「」『』《》<>":
+        return True
+    if "\u2460" <= ch <= "\u2473" or "\u2776" <= ch <= "\u277f":
+        return True
+    return False
+
+
+def _read_zodiac_run(text: str, start: int) -> list[str]:
+    """从肖标签后读取连续生肖。中间只允许标点和「一码」「独肖」，广告词会把名单截断。"""
+    i = start
+    n = len(text)
+    zodiacs: list[str] = []
+    while i < n and not zodiacs:
+        if text.startswith("一码", i) or text.startswith("独肖", i):
+            i += 2
             continue
+        ch = text[i]
+        if ch in _ZODIAC_CHARS:
+            break
+        if _is_sep(ch):
+            i += 1
+            continue
+        return []
+    while i < n:
+        ch = text[i]
+        if ch in _ZODIAC_CHARS:
+            zodiacs.append(ch)
+            i += 1
+            continue
+        if not _is_sep(ch):
+            break
+        j = i + 1
+        while j < n and _is_sep(text[j]):
+            j += 1
+        if j < n and text[j] in _ZODIAC_CHARS:
+            i = j
+            continue
+        break
+    return zodiacs
+
+
+def parse_xiao_runs(text: str) -> list[dict[str, Any]]:
+    """只保留「N肖」后面个数正好相等的生肖串。"""
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[int, tuple[str, ...]]] = set()
+    for m in _LABEL_RE.finditer(text or ""):
+        count = _XIAO_NUM[m.group(1)]
+        zodiacs = _read_zodiac_run(text, m.end())
+        if len(zodiacs) != count or len(set(zodiacs)) != count:
+            continue
+        key = (count, tuple(zodiacs))
+        if key in seen:
+            continue
+        seen.add(key)
+        label = f"{m.group(1)}肖"
         out.append(
             {
-                "strategy": "period_chunk",
-                "raw": chunk[:5000],
+                "strategy": "xiao_line",
+                "raw": text[m.start() : m.end() + 40][:500],
                 "zodiacs": zodiacs,
-                "tip_type": tip_type_from_text(chunk),
+                "tip_type": label,
+                "count": count,
             }
         )
     return out
 
 
-def _extract_tip_lines(text: str) -> list[dict[str, Any]]:
-    """策略 B：整页找「N肖 + 生肖串」行。"""
-    out: list[dict[str, Any]] = []
-    for m in TIP_LINE_RE.finditer(text.replace("\n", " ")):
-        label = m.group("label")
-        body = m.group("body")
-        zodiacs = extract_zodiacs_from_text(body)
-        if not zodiacs:
+def _is_prefix(short: tuple[str, ...], long: tuple[str, ...]) -> bool:
+    return len(short) < len(long) and long[: len(short)] == short
+
+
+def scope_for_xiao(count: int) -> str:
+    return "te_ma" if count <= 3 else "bao_xiao"
+
+
+def select_ladder_tips(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """同一条由短到长的阶梯只留一档：特码留最短，包肖留最长。"""
+    uniq: dict[tuple[str, ...], dict[str, Any]] = {}
+    for item in items:
+        zodiacs = tuple(item.get("zodiacs") or [])
+        count = int(item.get("count") or len(zodiacs))
+        if not zodiacs or count != len(zodiacs):
             continue
-        out.append(
-            {
-                "strategy": "tip_line",
-                "raw": m.group(0)[:5000],
-                "zodiacs": zodiacs,
-                "tip_type": label,
-            }
-        )
-    return out[:12]
+        uniq[zodiacs] = {**item, "zodiacs": list(zodiacs), "count": count}
+    rows = list(uniq.values())
+    parent = list(range(len(rows)))
 
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
 
-def _extract_signal_window(text: str) -> list[dict[str, Any]]:
-    """策略 C：含信号词的窗口，取出现的生肖。"""
-    if not SIGNAL_HINT.search(text):
-        return []
-    # 取含信号的片段，避免整页广告
-    parts = re.split(r"[\n\r]+", text)
-    windows: list[str] = []
-    for i, line in enumerate(parts):
-        if SIGNAL_HINT.search(line) or extract_zodiacs_from_text(line):
-            chunk = "\n".join(parts[max(0, i - 1) : i + 3])
-            windows.append(chunk)
-    out: list[dict[str, Any]] = []
-    seen: set[tuple[str, ...]] = set()
-    for w in windows[:20]:
-        zodiacs = extract_zodiacs_from_text(w)
-        if len(zodiacs) < 1:
-            continue
-        key = tuple(zodiacs)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(
-            {
-                "strategy": "signal_window",
-                "raw": w[:5000],
-                "zodiacs": zodiacs,
-                "tip_type": tip_type_from_text(w),
-            }
-        )
-    return out[:12]
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
 
+    seqs = [tuple(row["zodiacs"]) for row in rows]
+    for i, left in enumerate(seqs):
+        for j in range(i + 1, len(seqs)):
+            right = seqs[j]
+            if _is_prefix(left, right) or _is_prefix(right, left):
+                union(i, j)
 
-def _rank_extractions(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """比对：期号策略优先，其次短列表（更像一肖/二肖），再次 tip_line。"""
-    priority = {"period_chunk": 0, "tip_line": 1, "signal_window": 2}
+    groups: dict[int, list[dict[str, Any]]] = {}
+    for i, row in enumerate(rows):
+        groups.setdefault(find(i), []).append(row)
 
-    def key(it: dict[str, Any]):
-        tip = it.get("tip_type") or ""
-        tip_score = TIP_WEIGHT.get(tip, 0.1)
-        return (
-            priority.get(it.get("strategy") or "", 9),
-            -tip_score,
-            len(it.get("zodiacs") or []),
-        )
-
-    return sorted(items, key=key)
+    kept: list[dict[str, Any]] = []
+    for group in groups.values():
+        short = [row for row in group if row["count"] <= 3]
+        long = [row for row in group if row["count"] >= 4]
+        if short:
+            kept.append(min(short, key=lambda row: row["count"]))
+        if long:
+            kept.append(max(long, key=lambda row: row["count"]))
+    for row in kept:
+        row["play_scope"] = scope_for_xiao(int(row["count"]))
+    return kept
 
 
 def extract_candidates(text: str, period: int) -> list[dict[str, Any]]:
-    """多策略抽取后合并比对。"""
-    merged: list[dict[str, Any]] = []
-    period_items = _extract_period_chunks(text, period)
-    merged.extend(period_items)
-    # tip_line / signal 优先在当期段落内比，没有当期段落才退回整页
-    scope = "\n".join(_chunks_for_period(text, period)) or text
-    merged.extend(_extract_tip_lines(scope))
-    if not merged:
-        merged.extend(_extract_signal_window(scope))
-    return _rank_extractions(merged)
+    """当期段落里的肖名单，阶梯合并后入库。"""
+    scope = _scope_for_period(text, period)
+    if not scope:
+        return []
+    return select_ladder_tips(parse_xiao_runs(scope))
+
+
+def play_scope_for_tip(raw: str, tip_type: str | None, zodiacs: list[str]) -> str | None:
+    """一肖到三肖归特码，四肖到九肖归包肖。个数对不上的不参与。"""
+    parsed = parse_xiao_runs(raw or "")
+    if len(parsed) == 1:
+        return scope_for_xiao(int(parsed[0]["count"]))
+    label = tip_type or ""
+    count = _XIAO_NUM.get(label[:1])
+    if count and len(zodiacs or []) == count:
+        return scope_for_xiao(count)
+    return None
+
+
+def collapse_site_tips(tips: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按站点把已入库原文重新收成阶梯各一档。"""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for tip in tips:
+        raw = str(tip.get("raw_text") or tip.get("raw") or "")
+        site = str(tip.get("site_code") or "")
+        grouped.setdefault(site, []).extend(parse_xiao_runs(raw))
+    kept: list[dict[str, Any]] = []
+    for site, items in grouped.items():
+        for item in select_ladder_tips(items):
+            kept.append({**item, "site_code": site})
+    return kept
+
+
+def contributing_tips(tips: list[dict[str, Any]], play_type: str) -> list[dict[str, Any]]:
+    """打分用的资料。特码生肖要至少两家站点写到，才保留该生肖。"""
+    rows = [tip for tip in collapse_site_tips(tips) if tip.get("play_scope") == play_type]
+    if play_type != "te_ma":
+        return rows
+    support: dict[str, set[str]] = {}
+    for tip in rows:
+        site = str(tip.get("site_code") or "")
+        for zodiac in tip.get("zodiacs") or []:
+            support.setdefault(zodiac, set()).add(site)
+    out: list[dict[str, Any]] = []
+    for tip in rows:
+        listed = list(tip.get("zodiacs") or [])
+        agreed = [zodiac for zodiac in listed if len(support.get(zodiac, ())) >= _TEMA_MIN_SITES]
+        if not agreed:
+            continue
+        out.append({**tip, "zodiacs": agreed, "listed": listed})
+    return out
 
 
 def _store_candidates(
@@ -138,10 +225,21 @@ def _store_candidates(
 ) -> tuple[int, list[str]]:
     saved = 0
     strategies: list[str] = []
-    for item in candidates[:12]:
+    picked: list[dict[str, Any]] = []
+    per_scope = {"bao_xiao": 0, "te_ma": 0}
+    for item in candidates:
         zodiacs = item.get("zodiacs") or []
         if not zodiacs:
             continue
+        scope = item.get("play_scope") or play_scope_for_tip(
+            str(item.get("raw") or ""), item.get("tip_type"), zodiacs
+        )
+        if scope not in per_scope or per_scope[scope] >= 8:
+            continue
+        per_scope[scope] += 1
+        picked.append({**item, "play_scope": scope})
+    for item in picked:
+        zodiacs = item.get("zodiacs") or []
         strategy = str(item.get("strategy") or "unknown")
         raw = f"[{strategy}] {item.get('raw') or ''}"
         insert_site_tip(
@@ -151,6 +249,7 @@ def _store_candidates(
             raw_text=raw[:5000],
             parsed_zodiacs=zodiacs,
             tip_type=item.get("tip_type"),
+            play_scope=item.get("play_scope"),
         )
         saved += 1
         if strategy not in strategies:
@@ -236,70 +335,35 @@ def tip_scores_for_period(
     play_type: str = "bao_xiao",
     site_weights: dict[str, float] | None = None,
 ) -> dict[str, float]:
-    """按玩法拆分 tip 贡献，并乘以站点近期命中权重。"""
+    """阶梯收档后的资料分。特码只给两家以上写到的生肖加分。"""
     weights = site_weights or {}
     scores = {z: 0.0 for z in ZODIAC_ORDER}
-    for tip in tips:
-        zodiacs = tip.get("parsed_zodiacs") or []
-        if isinstance(zodiacs, str) or not zodiacs:
+    for tip in contributing_tips(tips, play_type):
+        listed = tip.get("listed") or tip.get("zodiacs") or []
+        zodiacs = tip.get("zodiacs") or []
+        if not listed or not zodiacs:
             continue
         tip_type = tip.get("tip_type") or ""
         w = TIP_WEIGHT.get(tip_type, 0.15)
-        raw = tip.get("raw_text") or ""
-        if raw.startswith("[period_chunk]"):
-            w *= 1.15
-        elif raw.startswith("[signal_window]"):
-            w *= 0.85
-        w *= _play_relevance(raw, tip_type, len(zodiacs), play_type)
-        site_code = tip.get("site_code") or ""
-        w *= float(weights.get(site_code, 1.0))
+        w *= float(weights.get(str(tip.get("site_code") or ""), 1.0))
         if w <= 0:
             continue
-        focus = 1.0 / max(len(zodiacs), 1)
-        for z in zodiacs:
-            if z in scores:
-                scores[z] += w * focus
+        focus = 1.0 / max(len(listed), 1)
+        for zodiac in zodiacs:
+            if zodiac in scores:
+                scores[zodiac] += w * focus
     return scores
 
 
-def _play_relevance(raw: str, tip_type: str, n_zodiacs: int, play_type: str) -> float:
-    """同一条 tip 对包肖 / 特码的相关度不同。"""
-    if play_type == "te_ma":
-        if "特码" in raw or "特肖" in raw:
-            return 1.15
-        if tip_type == "一肖":
-            return 1.0
-        if tip_type in ("二肖", "三肖") and n_zodiacs <= 3:
-            return 0.75
-        if tip_type in ("七肖", "八肖", "九肖") or "平特" in raw or "包肖" in raw:
-            return 0.2
-        return 0.4
-    # bao_xiao
-    if "平特" in raw or "包肖" in raw:
-        return 1.15
-    if tip_type in ("四肖", "五肖", "六肖", "七肖", "八肖", "九肖"):
-        return 1.0
-    if tip_type in ("二肖", "三肖"):
-        return 0.85
-    if tip_type == "一肖" or "特码" in raw:
-        return 0.55
-    return 0.7
-
-
-def primary_tip_for_site(tips: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """每站取最聚焦的一条作为对账主推（类型权重大、生肖少优先）。"""
-    valid = []
-    for tip in tips:
-        zodiacs = tip.get("parsed_zodiacs") or []
-        if isinstance(zodiacs, str) or not zodiacs:
-            continue
-        valid.append(tip)
-    if not valid:
+def primary_tip_for_site(
+    tips: list[dict[str, Any]], *, play_type: str | None = None
+) -> dict[str, Any] | None:
+    """每站取收档后最聚焦的一条作为对账主推。"""
+    rows = collapse_site_tips(tips)
+    if play_type:
+        rows = [tip for tip in rows if tip.get("play_scope") == play_type]
+    if not rows:
         return None
-
-    def key(tip: dict[str, Any]):
-        tip_type = tip.get("tip_type") or ""
-        zodiacs = tip.get("parsed_zodiacs") or []
-        return (-TIP_WEIGHT.get(tip_type, 0.1), len(zodiacs), tip.get("id") or 0)
-
-    return sorted(valid, key=key)[0]
+    picked = sorted(rows, key=lambda tip: (int(tip.get("count") or 99), tip.get("tip_type") or ""))[0]
+    zodiacs = list(picked.get("zodiacs") or [])
+    return {**picked, "parsed_zodiacs": zodiacs, "zodiacs": zodiacs}

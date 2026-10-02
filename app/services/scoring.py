@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from app.config import settings
 from app.repositories import get_recommends_for_period, list_draws_asc, list_tips, upsert_recommend
-from app.scrapers.tips import tip_scores_for_period
+from app.scrapers.tips import contributing_tips, tip_scores_for_period
 from app.services.zodiac import ZODIAC_ORDER, bao_xiao_hit
 
 PlayType = Literal["bao_xiao", "te_ma"]
@@ -122,6 +122,26 @@ def _score_one(
         key=lambda z: (totals[z], omit[z], -ZODIAC_ORDER.index(z)),
     )
 
+    existing = next(
+        (
+            row
+            for row in get_recommends_for_period(target_period)
+            if row["play_type"] == play_type and row.get("hit") is not None
+        ),
+        None,
+    )
+    if existing:
+        return {
+            "period": target_period,
+            "play_type": play_type,
+            "mode_label": mode_label,
+            "hit_rule": hit_rule,
+            "zodiac": existing["zodiac"],
+            "score": round(float(existing["score"]), 4),
+            "score_detail": existing.get("score_detail") or {},
+            "locked": True,
+        }
+
     store_detail = {
         "mode": play_type,
         "mode_label": mode_label,
@@ -140,7 +160,10 @@ def _score_one(
         "reasons": [
             reason_omit.format(n=omit[winner]),
             reason_hot.format(w=settings.hot_window, n=hot[winner]),
-            f"站点推荐加权分 {round(tip_raw[winner], 4)}（共{tip_count}条，玩法={mode_label}）",
+            (
+                f"{mode_label}资料 {tip_count} 条，加权分 {round(tip_raw[winner], 4)}"
+                + ("（至少两家写到才计分）" if play_type == "te_ma" else "")
+            ),
         ],
     }
     upsert_recommend(target_period, play_type, winner, totals[winner], store_detail)
@@ -153,6 +176,10 @@ def _score_one(
         "score": round(totals[winner], 4),
         "score_detail": store_detail,
     }
+
+
+def _count_scoped_tips(tips: list[dict[str, Any]], play_type: str) -> int:
+    return len(contributing_tips(tips, play_type))
 
 
 def score_for_period(target_period: int) -> dict[str, Any]:
@@ -169,6 +196,8 @@ def score_for_period(target_period: int) -> dict[str, Any]:
         history = draws
 
     tips = list_tips(target_period)
+    bao_tip_count = _count_scoped_tips(tips, "bao_xiao")
+    tema_tip_count = _count_scoped_tips(tips, "te_ma")
     bao_site_w = site_weights_for_period("bao_xiao", target_period)
     tema_site_w = site_weights_for_period("te_ma", target_period)
     tip_raw_bao = tip_scores_for_period(
@@ -184,7 +213,7 @@ def score_for_period(target_period: int) -> dict[str, Any]:
         latest=latest,
         history=history,
         tip_raw=tip_raw_bao,
-        tip_count=len(tips),
+        tip_count=bao_tip_count,
         site_weights=bao_site_w,
     )
     tema = _score_one(
@@ -193,7 +222,7 @@ def score_for_period(target_period: int) -> dict[str, Any]:
         latest=latest,
         history=history,
         tip_raw=tip_raw_tema,
-        tip_count=len(tips),
+        tip_count=tema_tip_count,
         site_weights=tema_site_w,
     )
     return {

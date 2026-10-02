@@ -43,6 +43,18 @@ def reconcile_recommend_period(period: int) -> list[dict[str, Any]]:
     for row in get_recommends_for_period(period):
         play = row["play_type"]
         zodiac = row["zodiac"]
+        # 已有结果（含手动录入）不再被自动对账覆盖
+        if row.get("hit") is not None:
+            out.append(
+                {
+                    "period": period,
+                    "play_type": play,
+                    "zodiac": zodiac,
+                    "hit": bool(int(row["hit"])),
+                    "kept": True,
+                }
+            )
+            continue
         if play == "bao_xiao":
             hit = bao_xiao_hit(zodiac, draw, settings.lunar_year)
         else:
@@ -63,14 +75,14 @@ def reconcile_site_tips_period(period: int) -> list[dict[str, Any]]:
 
     out: list[dict[str, Any]] = []
     for site_code, items in by_site.items():
-        primary = primary_tip_for_site(items)
-        if not primary:
-            continue
-        zodiacs = list(primary.get("parsed_zodiacs") or [])
-        tip_type = primary.get("tip_type")
-        # 与系统「只荐一肖」对齐：取主推最前 1 个生肖计命中，避免七肖虚高
-        focus = zodiacs[:1]
         for play in ("bao_xiao", "te_ma"):
+            primary = primary_tip_for_site(items, play_type=play)
+            if not primary:
+                continue
+            zodiacs = list(primary.get("parsed_zodiacs") or [])
+            tip_type = primary.get("tip_type")
+            # 与系统「只荐一肖」对齐：取该玩法主推最前 1 个生肖计命中
+            focus = zodiacs[:1]
             hit = _evaluate_zodiacs(focus, draw, play)  # type: ignore[arg-type]
             upsert_site_tip_hit(
                 period=period,

@@ -89,13 +89,14 @@ def insert_site_tip(
     raw_text: str,
     parsed_zodiacs: list[str],
     tip_type: str | None,
+    play_scope: str | None = None,
 ) -> None:
     with db_cursor() as cur:
         cur.execute(
             """
             INSERT INTO site_tip
-              (period, site_code, page_url, raw_text, parsed_zodiacs, tip_type)
-            VALUES (%s, %s, %s, %s, %s, %s)
+              (period, site_code, page_url, raw_text, parsed_zodiacs, tip_type, play_scope)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 period,
@@ -104,6 +105,7 @@ def insert_site_tip(
                 raw_text,
                 json.dumps(parsed_zodiacs, ensure_ascii=False),
                 tip_type,
+                play_scope,
             ),
         )
 
@@ -117,7 +119,7 @@ def list_tips(period: int) -> list[dict[str, Any]]:
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT id, period, site_code, page_url, raw_text, parsed_zodiacs, tip_type, scraped_at
+            SELECT id, period, site_code, page_url, raw_text, parsed_zodiacs, tip_type, play_scope, scraped_at
             FROM site_tip
             WHERE period=%s
             ORDER BY id DESC

@@ -100,6 +100,26 @@ h1 {
 
 .actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
 
+.hit-field {
+  margin: 0;
+  border: 1px solid var(--line);
+  padding: 12px 14px 14px;
+  background: rgba(0, 0, 0, 0.18);
+}
+.hit-field legend {
+  padding: 0 6px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+.hit-field label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 16px;
+  cursor: pointer;
+}
+.hit-choices { margin-bottom: 14px; }
+
 button {
   border: 0;
   background: var(--accent);
@@ -165,6 +185,39 @@ th, td {
   white-space: nowrap;
 }
 th { color: var(--muted); font-weight: 600; }
+
+.hint {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.notice {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(8, 14, 12, 0.62);
+}
+.notice[hidden] { display: none; }
+.notice-card {
+  width: min(420px, 100%);
+  padding: 22px 20px 18px;
+  border: 1px solid var(--line);
+  background: #17352a;
+  text-align: center;
+}
+.notice-card h3 { margin: 0 0 10px; font-size: 18px; }
+.notice-card p {
+  margin: 0 0 16px;
+  color: var(--muted);
+  line-height: 1.7;
+  white-space: pre-line;
+}
 
 .foot {
   margin-top: 28px;

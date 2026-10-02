@@ -2,10 +2,18 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from app.db import ping_db
 from app.jobs.pipeline import refresh_all
-from app.repositories import latest_draw, latest_scrape_run, list_draws
+from app.repositories import (
+    get_draw,
+    get_recommends_for_period,
+    latest_draw,
+    latest_scrape_run,
+    list_draws,
+    update_recommend_hit,
+)
 from app.services.reconcile import hit_summary, reconcile_pending, site_weights_for_period
 from app.services.scoring import latest_recommendation, score_for_period
 
@@ -41,6 +49,7 @@ def latest_recommend_api():
     return {
         "recommend": rec,
         "latest_draw": draw,
+        "settle": _settle_target(rec),
         "scrape_run": run,
         "site_weights": weights,
         "hits": hit_summary(limit=12),
@@ -57,6 +66,58 @@ def hit_stats_api():
             "bao_xiao": site_weights_for_period("bao_xiao", period),
             "te_ma": site_weights_for_period("te_ma", period),
         },
+    }
+
+
+class ManualHitBody(BaseModel):
+    period: int
+    bao_xiao: bool
+    te_ma: bool
+
+
+def _hit_flag(value: object) -> bool | None:
+    if value is None:
+        return None
+    return bool(int(value))  # type: ignore[arg-type]
+
+
+def _brief_pick(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    return {"zodiac": row.get("zodiac"), "hit": _hit_flag(row.get("hit"))}
+
+
+def _settle_target(rec: dict | None) -> dict | None:
+    """录入区跟当前预测同一期、同一生肖，避免还停在上一期。"""
+    if not rec:
+        return None
+    period = int(rec["period"])
+    bao = rec.get("bao_xiao")
+    tema = rec.get("te_ma")
+    if not bao and not tema:
+        return None
+    return {
+        "period": period,
+        "drawn": get_draw(period) is not None,
+        "bao_xiao": _brief_pick(bao),
+        "te_ma": _brief_pick(tema),
+    }
+
+
+@router.post("/manual-hit")
+def manual_hit(body: ManualHitBody):
+    rows = get_recommends_for_period(body.period)
+    by_type = {r["play_type"]: r for r in rows}
+    missing = [name for name in ("bao_xiao", "te_ma") if name not in by_type]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"{body.period}期还没有完整推荐，无法录入")
+    update_recommend_hit(body.period, "bao_xiao", body.bao_xiao)
+    update_recommend_hit(body.period, "te_ma", body.te_ma)
+    return {
+        "ok": True,
+        "period": body.period,
+        "bao_xiao": body.bao_xiao,
+        "te_ma": body.te_ma,
     }
 
 

@@ -205,6 +205,7 @@ function renderRecommend(payload) {
     fillPick("Bao", null);
     fillPick("Tema", null);
     renderHits(payload);
+    renderBacktest(payload.backtest);
     renderManual(payload);
     return;
   }
@@ -217,7 +218,41 @@ function renderRecommend(payload) {
   fillPick("Bao", rec.bao_xiao);
   fillPick("Tema", rec.te_ma);
   renderHits(payload);
+  renderBacktest(payload.backtest);
   renderManual(payload);
+}
+
+function pct(hits, total) {
+  if (!total) return "—";
+  return `${hits}/${total} = ${(hits / total * 100).toFixed(1)}%`;
+}
+
+function renderBacktest(snapshot) {
+  const meta = document.getElementById("backtestMeta");
+  const body = document.getElementById("backtestBody");
+  const note = document.getElementById("backtestNote");
+  if (!snapshot) {
+    meta.textContent = "还没有对照。新开奖写入后，点一次「刷新分析」就会算出。";
+    body.innerHTML = "";
+    note.textContent = "";
+    return;
+  }
+  const baoBase = ((snapshot.bao_baseline || 0) * 100).toFixed(1);
+  meta.textContent =
+    `${snapshot.from_period}–${snapshot.through_period} 期，共 ${snapshot.n} 期` +
+    (snapshot.saved_at ? ` · ${snapshot.saved_at} 更新` : "") +
+    ` · 随机基准 特码 8.3% / 包肖 ${baoBase}%`;
+  body.innerHTML = (snapshot.rows || [])
+    .map(
+      (row) => `<tr>
+        <td>${escapeHTML(row.label)}</td>
+        <td>${pct(row.tema_hits, row.n)}</td>
+        <td>${pct(row.bao_hits, row.n)}</td>
+      </tr>`
+    )
+    .join("");
+  const tips = snapshot.tema_tips || {};
+  note.textContent = tips.note || "";
 }
 
 function renderDraws(items) {

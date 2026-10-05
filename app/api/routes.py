@@ -10,6 +10,7 @@ from app.repositories import (
     get_draw,
     get_recommends_for_period,
     latest_draw,
+    latest_backtest_snapshot,
     latest_scrape_run,
     list_draws,
     update_recommend_hit,
@@ -53,6 +54,7 @@ def latest_recommend_api():
         "scrape_run": run,
         "site_weights": weights,
         "hits": hit_summary(limit=20),
+        "backtest": latest_backtest_snapshot(),
     }
 
 

@@ -75,3 +75,12 @@ CREATE TABLE IF NOT EXISTS scrape_run (
   PRIMARY KEY (id),
   KEY idx_started_at (started_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='抓取运行日志表';
+
+CREATE TABLE IF NOT EXISTS backtest_snapshot (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  through_period INT UNSIGNED NOT NULL COMMENT '回测用到的最新已开奖期',
+  payload JSON NOT NULL COMMENT '对照结果',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '写入时间',
+  PRIMARY KEY (id),
+  KEY idx_through_period (through_period)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='滚动回测快照。不改推荐，不改权重';

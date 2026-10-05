@@ -11,6 +11,7 @@ from app.services.reconcile import (
     reconcile_site_tips_period,
 )
 from app.services.scoring import score_for_period
+from app.services.walkforward import refresh_backtest_if_needed
 
 
 def _exc_text(exc: BaseException) -> str:
@@ -56,6 +57,10 @@ async def refresh_all(*, full_history: bool = False) -> dict[str, Any]:
             "recommend": reconcile_recommend_period(latest_period),
             "site_tips": reconcile_site_tips_period(latest_period),
         }
+        try:
+            summary["backtest"] = refresh_backtest_if_needed(latest_period)
+        except Exception as exc:
+            summary["backtest_error"] = _exc_text(exc)
 
         # 默认预测「最新已开奖期 + 1」；live 未开奖时 waiting_period 就是当期
         target_period = latest_period + 1

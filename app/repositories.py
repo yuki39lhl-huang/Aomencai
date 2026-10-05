@@ -139,6 +139,86 @@ def list_tips(period: int) -> list[dict[str, Any]]:
         return rows
 
 
+def list_tips_by_period() -> dict[int, list[dict[str, Any]]]:
+    """全部资料按期号分组，供滚动回测一次取出。"""
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT period, site_code, raw_text, parsed_zodiacs, tip_type, play_scope
+            FROM site_tip
+            ORDER BY period ASC, id ASC
+            """
+        )
+        rows = list(cur.fetchall())
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        pz = row.get("parsed_zodiacs")
+        if isinstance(pz, (bytes, bytearray)):
+            pz = pz.decode("utf-8")
+        if isinstance(pz, str):
+            try:
+                row["parsed_zodiacs"] = json.loads(pz)
+            except json.JSONDecodeError:
+                row["parsed_zodiacs"] = []
+        grouped.setdefault(int(row["period"]), []).append(row)
+    return grouped
+
+
+def ensure_backtest_table() -> None:
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS backtest_snapshot (
+              id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+              through_period INT UNSIGNED NOT NULL COMMENT '回测用到的最新已开奖期',
+              payload JSON NOT NULL COMMENT '对照结果',
+              created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '写入时间',
+              PRIMARY KEY (id),
+              KEY idx_through_period (through_period)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+              COMMENT='滚动回测快照。不改推荐，不改权重'
+            """
+        )
+
+
+def save_backtest_snapshot(through_period: int, payload: dict[str, Any]) -> None:
+    ensure_backtest_table()
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO backtest_snapshot (through_period, payload)
+            VALUES (%s, %s)
+            """,
+            (through_period, json.dumps(payload, ensure_ascii=False)),
+        )
+
+
+def latest_backtest_snapshot() -> dict[str, Any] | None:
+    ensure_backtest_table()
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT through_period, payload, created_at
+            FROM backtest_snapshot
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    payload = row.get("payload")
+    if isinstance(payload, (bytes, bytearray)):
+        payload = payload.decode("utf-8")
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    created = row.get("created_at")
+    saved_at = created.strftime("%Y-%m-%d %H:%M") if isinstance(created, datetime) else None
+    if isinstance(payload, dict):
+        payload = {**payload, "saved_at": saved_at}
+    return payload
+
+
 def upsert_recommend(
     period: int, play_type: str, zodiac: str, score: float, detail: dict[str, Any]
 ) -> None:

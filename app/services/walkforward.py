@@ -1,0 +1,220 @@
+"""滚动回测：预测第 N 期时只用更早的开奖。不写推荐，不改权重。"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from app.config import settings
+from app.repositories import (
+    latest_backtest_snapshot,
+    list_draws_asc,
+    list_tips_by_period,
+    save_backtest_snapshot,
+)
+from app.scrapers.tips import contributing_tips, tip_scores_for_period
+from app.services.reconcile import site_weights_for_period
+from app.services.scoring import (
+    _gap_component,
+    _hot_bao,
+    _hot_tema,
+    _normalize,
+    _omit_bao,
+    _omit_tema,
+    _scaled_component,
+)
+from app.services.zodiac import ZODIAC_ORDER, bao_xiao_hit, zodiac_numbers
+
+_START = 40
+
+
+def _comb(n: int, k: int) -> int:
+    if k < 0 or n < 0 or k > n:
+        return 0
+    return math.comb(n, k)
+
+
+def bao_cover_rate(zodiacs: list[str]) -> float:
+    """k 个生肖至少有一个出现在 7 个号码里的概率。"""
+    covered: set[int] = set()
+    for zodiac in zodiacs:
+        covered.update(zodiac_numbers(zodiac, settings.lunar_year))
+    outside = 49 - len(covered)
+    total = _comb(49, 7)
+    if total <= 0:
+        return 0.0
+    return 1.0 - _comb(outside, 7) / total
+
+
+def _pick_coldest(omit: dict[str, int]) -> str:
+    return max(ZODIAC_ORDER, key=lambda z: (omit[z], -ZODIAC_ORDER.index(z)))
+
+
+def _pick_gap(omit: dict[str, int], center: int) -> str:
+    return max(
+        ZODIAC_ORDER,
+        key=lambda z: (-abs(omit[z] - center), -ZODIAC_ORDER.index(z)),
+    )
+
+
+def _pick_hot(hot: dict[str, int]) -> str:
+    return max(ZODIAC_ORDER, key=lambda z: (hot[z], -ZODIAC_ORDER.index(z)))
+
+
+def _current_winner(
+    *,
+    play: str,
+    omit: dict[str, int],
+    hot: dict[str, int],
+    tip_raw: dict[str, float],
+) -> str:
+    if play == "bao_xiao":
+        center = settings.bao_omit_center
+        half = settings.bao_omit_half
+        hot_full = settings.hot_window
+        tip_weight = settings.weight_tip
+    else:
+        center = settings.tema_omit_center
+        half = settings.tema_omit_half
+        hot_full = settings.tema_hot_full
+        tip_weight = 0.0
+    omit_n = _gap_component(omit, center=center, half_width=half)
+    hot_n = _scaled_component(hot, min_lead=settings.score_min_lead, full_at=hot_full)
+    tip_n = _normalize(tip_raw) if tip_weight > 0 else {z: 0.0 for z in ZODIAC_ORDER}
+    totals = {
+        z: (
+            settings.weight_omit * omit_n[z]
+            + settings.weight_hot * hot_n[z]
+            + tip_weight * tip_n[z]
+        )
+        for z in ZODIAC_ORDER
+    }
+    return max(
+        ZODIAC_ORDER,
+        key=lambda z: (totals[z], -abs(omit[z] - center), -ZODIAC_ORDER.index(z)),
+    )
+
+
+def run_walkforward() -> dict[str, Any] | None:
+    draws = list_draws_asc()
+    if len(draws) <= _START:
+        return None
+
+    stats = {
+        name: {"tema": 0, "bao": 0, "n": 0}
+        for name in ("cold", "gap", "hot", "current")
+    }
+    single_bao = sum(bao_cover_rate([z]) for z in ZODIAC_ORDER) / len(ZODIAC_ORDER)
+    tips_by_period = list_tips_by_period()
+
+    tema_tip_hit = 0
+    tema_tip_base = 0.0
+    tema_tip_n = 0
+    by_count: dict[int, list[int]] = {}
+
+    for i in range(_START, len(draws)):
+        history = draws[:i]
+        row = draws[i]
+        period = int(row["period"])
+        special = row["special_zodiac"]
+        omit_t = _omit_tema(history)
+        omit_b = _omit_bao(history)
+        hot_t = _hot_tema(history, settings.hot_window)
+        hot_b = _hot_bao(history, settings.hot_window)
+        tips = tips_by_period.get(period, [])
+        bao_tips = contributing_tips(tips, "bao_xiao")
+        if bao_tips:
+            weights = site_weights_for_period("bao_xiao", period)
+            tip_raw = tip_scores_for_period(
+                period, tips, play_type="bao_xiao", site_weights=weights
+            )
+        else:
+            tip_raw = {z: 0.0 for z in ZODIAC_ORDER}
+
+        picks = {
+            "cold": (_pick_coldest(omit_t), _pick_coldest(omit_b)),
+            "gap": (
+                _pick_gap(omit_t, settings.tema_omit_center),
+                _pick_gap(omit_b, settings.bao_omit_center),
+            ),
+            "hot": (_pick_hot(hot_t), _pick_hot(hot_b)),
+            "current": (
+                _current_winner(play="te_ma", omit=omit_t, hot=hot_t, tip_raw=tip_raw),
+                _current_winner(play="bao_xiao", omit=omit_b, hot=hot_b, tip_raw=tip_raw),
+            ),
+        }
+        for name, (tema_z, bao_z) in picks.items():
+            stats[name]["n"] += 1
+            stats[name]["tema"] += int(tema_z == special)
+            stats[name]["bao"] += int(bao_xiao_hit(bao_z, row))
+
+        for tip in contributing_tips(tips, "te_ma"):
+            zodiacs = list(tip.get("zodiacs") or [])
+            if not zodiacs:
+                continue
+            count = len(zodiacs)
+            hit = int(special in zodiacs)
+            tema_tip_hit += hit
+            tema_tip_base += count / 12
+            tema_tip_n += 1
+            bucket = by_count.setdefault(count, [0, 0])
+            bucket[0] += hit
+            bucket[1] += 1
+
+    n = stats["cold"]["n"]
+    labels = (
+        ("cold", "追最冷"),
+        ("gap", "靠近典型间隔"),
+        ("hot", "只看热度"),
+        ("current", "现行公式"),
+    )
+    if tema_tip_n and tema_tip_hit <= tema_tip_base * 1.15:
+        tip_note = "特码资料没有明显高于名单长度 / 12，权重保持 0。"
+        keep_zero = True
+    elif tema_tip_n:
+        tip_note = "特码资料覆盖高于名单基准，仍不自动加进排名。"
+        keep_zero = False
+    else:
+        tip_note = "这些期里没有特码名单。"
+        keep_zero = True
+
+    return {
+        "from_period": int(draws[_START]["period"]),
+        "through_period": int(draws[-1]["period"]),
+        "n": n,
+        "tema_baseline": 0.083,
+        "bao_baseline": round(single_bao, 4),
+        "rows": [
+            {
+                "key": key,
+                "label": label,
+                "tema_hits": stats[key]["tema"],
+                "bao_hits": stats[key]["bao"],
+                "n": stats[key]["n"],
+            }
+            for key, label in labels
+        ],
+        "tema_tips": {
+            "records": tema_tip_n,
+            "hits": tema_tip_hit,
+            "expected_hits": round(tema_tip_base, 1),
+            "keep_weight_zero": keep_zero,
+            "by_count": [
+                {"count": count, "hits": pair[0], "n": pair[1]}
+                for count, pair in sorted(by_count.items())
+            ],
+            "note": tip_note,
+        },
+    }
+
+
+def refresh_backtest_if_needed(latest_drawn_period: int) -> dict[str, Any]:
+    """新开奖期还没对照过时才重算。同一期重复刷新直接沿用上次结果。"""
+    current = latest_backtest_snapshot()
+    if current and int(current.get("through_period") or 0) >= latest_drawn_period:
+        return {"updated": False, "snapshot": current}
+    snapshot = run_walkforward()
+    if not snapshot:
+        return {"updated": False, "snapshot": current}
+    save_backtest_snapshot(int(snapshot["through_period"]), snapshot)
+    saved = latest_backtest_snapshot()
+    return {"updated": True, "snapshot": saved or snapshot}

@@ -58,7 +58,77 @@ h1 {
   margin: 18px 0 8px;
 }
 @media (max-width: 640px) {
+  .page { width: 100%; padding: 16px 12px 40px; }
+  .hero, .block { padding-left: 14px; padding-right: 14px; }
   .dual { grid-template-columns: 1fr; }
+  .hit-table thead,
+  .draw-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .hit-table,
+  .hit-table tbody,
+  .draw-table,
+  .draw-table tbody { display: block; }
+  .hit-table tr {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 6px 8px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .hit-table td,
+  .draw-table td {
+    border: 0;
+    padding: 0;
+    white-space: normal;
+  }
+  .hit-table td:nth-child(1) { grid-column: 1 / -1; font-weight: 700; }
+  .hit-table td:nth-child(2) { grid-column: 1 / 3; grid-row: 2; }
+  .hit-table td:nth-child(3) { grid-column: 3; grid-row: 2; }
+  .hit-table td:nth-child(4) { grid-column: 1 / 3; grid-row: 3; }
+  .hit-table td:nth-child(5) { grid-column: 3; grid-row: 3; }
+  .hit-table td:nth-child(6) { grid-column: 1 / -1; grid-row: 4; color: var(--muted); }
+  .hit-table td:nth-child(2)::before { content: "包肖 "; color: var(--muted); font-weight: 400; }
+  .hit-table td:nth-child(4)::before { content: "特码 "; color: var(--muted); font-weight: 400; }
+  .hit-table td:nth-child(6)::before { content: "开奖特肖 "; }
+  .draw-table tr {
+    display: block;
+    padding: 12px 0 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .draw-table td:nth-child(1),
+  .draw-table td:nth-child(2) {
+    display: inline-block;
+    margin-right: 10px;
+    font-weight: 700;
+  }
+  .draw-table td:nth-child(2) { color: var(--muted); font-weight: 400; }
+  .draw-table .nums {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+    white-space: normal;
+  }
+  .draw-table td:nth-child(4),
+  .draw-table td:nth-child(5) {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    margin-right: 12px;
+  }
+  .draw-table td:nth-child(4)::before,
+  .draw-table td:nth-child(5)::before {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .draw-table td:nth-child(4)::before { content: "特码"; }
+  .draw-table td:nth-child(5)::before { content: "生肖"; }
 }
 
 .pick {
@@ -156,20 +226,63 @@ button.ghost {
 }
 
 .reasons {
-  margin: 0;
+  margin: 12px 0 0;
   padding-left: 18px;
   color: var(--muted);
-  line-height: 1.7;
+  line-height: 1.65;
+  text-align: left;
+  font-size: 13px;
 }
 
-.detail {
-  margin: 12px 0 0;
-  padding: 12px;
-  overflow: auto;
-  background: rgba(0,0,0,0.25);
-  border: 1px solid var(--line);
-  color: #d7e0da;
+.subhead {
+  margin: 22px 0 8px;
+  font-size: 15px;
+  letter-spacing: 0.06em;
+}
+
+.tag {
+  display: inline-block;
+  min-width: 3.2em;
+  padding: 2px 8px;
+  border-radius: 999px;
   font-size: 12px;
+  text-align: center;
+}
+.tag.ok { background: rgba(72, 160, 110, 0.28); color: #d7ffe8; }
+.tag.no { background: rgba(224, 122, 95, 0.22); color: #ffd2c8; }
+.tag.wait { background: rgba(212, 160, 23, 0.18); color: #f3e2b0; }
+
+.weights {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+.weight {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  color: var(--muted);
+}
+.weight b { color: var(--ink); font-weight: 700; margin-right: 6px; }
+
+.nums { white-space: nowrap; }
+.ball {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin: 2px;
+  border-radius: 50%;
+  background: rgba(243, 240, 230, 0.12);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.ball.special {
+  background: var(--accent);
+  color: #1b1404;
+  font-weight: 700;
 }
 
 .table-wrap { overflow-x: auto; }

@@ -224,6 +224,20 @@ def get_draw(period: int) -> dict[str, Any] | None:
         return cur.fetchone()
 
 
+def list_drawn_tip_periods() -> list[int]:
+    """已有开奖、且存了资料的期号。"""
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT t.period
+            FROM site_tip t
+            INNER JOIN draw_result d ON d.period = t.period
+            ORDER BY t.period ASC
+            """
+        )
+        return [int(r["period"]) for r in cur.fetchall()]
+
+
 def list_tip_periods_for_site_hits() -> list[int]:
     """有 tip 且已开奖、但尚未写入 site_tip_hit（任一玩法）的期号。"""
     with db_cursor() as cur:
@@ -250,24 +264,26 @@ def upsert_site_tip_hit(
     hit: bool,
     primary_zodiacs: list[str],
     tip_type: str | None,
+    list_hit: bool | None = None,
 ) -> None:
+    """写入站点对账。已有行的 hit（只荐一肖）不覆盖，只补名单覆盖。"""
     with db_cursor() as cur:
         cur.execute(
             """
             INSERT INTO site_tip_hit
-              (period, site_code, play_type, hit, primary_zodiacs, tip_type)
-            VALUES (%s, %s, %s, %s, %s, %s)
+              (period, site_code, play_type, hit, list_hit, primary_zodiacs, tip_type)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
-              hit=VALUES(hit),
+              list_hit=VALUES(list_hit),
               primary_zodiacs=VALUES(primary_zodiacs),
-              tip_type=VALUES(tip_type),
-              created_at=CURRENT_TIMESTAMP
+              tip_type=VALUES(tip_type)
             """,
             (
                 period,
                 site_code,
                 play_type,
                 1 if hit else 0,
+                None if list_hit is None else (1 if list_hit else 0),
                 json.dumps(primary_zodiacs, ensure_ascii=False),
                 tip_type,
             ),

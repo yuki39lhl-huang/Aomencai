@@ -52,7 +52,7 @@ def latest_recommend_api():
         "settle": _settle_target(rec),
         "scrape_run": run,
         "site_weights": weights,
-        "hits": hit_summary(limit=12),
+        "hits": hit_summary(limit=20),
     }
 
 

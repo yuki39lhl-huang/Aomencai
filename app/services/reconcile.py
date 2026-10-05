@@ -81,15 +81,18 @@ def reconcile_site_tips_period(period: int) -> list[dict[str, Any]]:
                 continue
             zodiacs = list(primary.get("parsed_zodiacs") or [])
             tip_type = primary.get("tip_type")
-            # 与系统「只荐一肖」对齐：取该玩法主推最前 1 个生肖计命中
+            # hit 只看名单第一个生肖，供站点权重使用，基准仍是单肖。
+            # list_hit 看完整名单是否覆盖开奖生肖，不参与权重。
             focus = zodiacs[:1]
             hit = _evaluate_zodiacs(focus, draw, play)  # type: ignore[arg-type]
+            covered = _evaluate_zodiacs(zodiacs, draw, play)  # type: ignore[arg-type]
             upsert_site_tip_hit(
                 period=period,
                 site_code=site_code,
                 play_type=play,
                 hit=hit,
-                primary_zodiacs=focus,
+                list_hit=covered,
+                primary_zodiacs=zodiacs,
                 tip_type=tip_type,
             )
             out.append(
@@ -98,11 +101,22 @@ def reconcile_site_tips_period(period: int) -> list[dict[str, Any]]:
                     "site_code": site_code,
                     "play_type": play,
                     "hit": hit,
-                    "zodiacs": focus,
+                    "list_hit": covered,
+                    "zodiacs": zodiacs,
                     "tip_type": tip_type,
                 }
             )
     return out
+
+
+def backfill_list_hits() -> int:
+    """给已有站点对账补上名单覆盖。不改 hit 列，因此已写入的只荐一肖中没中保持原样。"""
+    from app.repositories import list_drawn_tip_periods
+
+    count = 0
+    for period in list_drawn_tip_periods():
+        count += len(reconcile_site_tips_period(period))
+    return count
 
 
 def reconcile_pending() -> dict[str, Any]:
@@ -132,7 +146,7 @@ def reconcile_pending() -> dict[str, Any]:
 def site_weights_for_period(
     play_type: PlayType, target_period: int
 ) -> dict[str, float]:
-    """根据 target_period 之前近 N 期命中率，给出站点权重（无样本≈1）。"""
+    """按 target_period 之前近 N 期「只荐一肖」命中率给权重。不用名单覆盖，避免名单越长权重越高。"""
     window = settings.site_hit_window
     stats = site_hit_stats(play_type, before_period=target_period, window=window)
     expected = (

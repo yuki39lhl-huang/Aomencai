@@ -55,6 +55,19 @@ def main() -> None:
         else:
             print("recommend_log.hit exists")
 
+        if _table_exists(cur, "site_tip_hit") and not _column_exists(cur, "site_tip_hit", "list_hit"):
+            cur.execute(
+                """
+                ALTER TABLE site_tip_hit
+                  ADD COLUMN list_hit TINYINT NULL DEFAULT NULL
+                  COMMENT '名单覆盖：开奖生肖落在完整名单里为 1，否则 0。不参与站点权重'
+                  AFTER hit
+                """
+            )
+            print("added site_tip_hit.list_hit")
+        elif _table_exists(cur, "site_tip_hit"):
+            print("site_tip_hit.list_hit exists")
+
         if not _table_exists(cur, "site_tip_hit"):
             cur.execute(
                 """
@@ -63,8 +76,9 @@ def main() -> None:
                   period INT UNSIGNED NOT NULL COMMENT '期号',
                   site_code VARCHAR(32) NOT NULL COMMENT '站点编码',
                   play_type VARCHAR(16) NOT NULL COMMENT '玩法：bao_xiao / te_ma',
-                  hit TINYINT NOT NULL COMMENT '1中 0否',
-                  primary_zodiacs JSON NULL COMMENT '该站当期主推生肖',
+                  hit TINYINT NOT NULL COMMENT '只荐一肖：名单第一个生肖是否命中。站点权重只用这一列',
+                  list_hit TINYINT NULL DEFAULT NULL COMMENT '名单覆盖：开奖生肖落在完整名单里为 1，否则 0。不参与站点权重',
+                  primary_zodiacs JSON NULL COMMENT '该站当期主推的完整生肖名单',
                   tip_type VARCHAR(32) NULL COMMENT '主推类型',
                   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '对账时间',
                   PRIMARY KEY (id),
@@ -78,6 +92,10 @@ def main() -> None:
         else:
             print("site_tip_hit exists")
     conn.close()
+    from app.services.reconcile import backfill_list_hits
+
+    filled = backfill_list_hits()
+    print(f"list_hit backfill rows={filled}")
     print("migrate ok")
 
 

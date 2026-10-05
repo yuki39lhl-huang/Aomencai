@@ -13,43 +13,119 @@ function setStatus(text, isErr) {
   el.className = "status" + (isErr ? " err" : "");
 }
 
+const SITE_NAMES = {
+  yanjiuyuan: "研究院",
+  dinggeshui: "定个水",
+  s772200: "772200",
+  s15043: "15043",
+  s590555: "590555",
+  s42054: "42054",
+  s3497: "3497",
+  s2549: "2549",
+  s19333: "19333",
+};
+
+function escapeHTML(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function asDetail(row) {
+  let detail = row.score_detail || {};
+  if (typeof detail === "string") {
+    try {
+      detail = JSON.parse(detail);
+    } catch {
+      detail = {};
+    }
+  }
+  return detail;
+}
+
 function fillPick(prefix, row) {
   const zodiacEl = document.getElementById("zodiac" + prefix);
   const metaEl = document.getElementById("meta" + prefix);
   const reasonsEl = document.getElementById("reasons" + prefix);
-  const detailEl = document.getElementById("detail" + prefix);
 
   if (!row) {
     zodiacEl.textContent = "—";
     metaEl.textContent = "";
     reasonsEl.innerHTML = "";
-    detailEl.textContent = "";
     return;
   }
 
   zodiacEl.textContent = row.zodiac;
-  metaEl.textContent = `得分 ${row.score}`;
-  const detail = row.score_detail || {};
+  const detail = asDetail(row);
+  const winner = detail.winner_detail || {};
+  const bits = [`得分 ${row.score}`];
+  if (winner.omit !== undefined) bits.push(`遗漏 ${winner.omit} 期`);
+  if (winner.hot !== undefined) bits.push(`热度 ${winner.hot} 次`);
+  metaEl.textContent = bits.join(" · ");
   const reasons = detail.reasons || [];
-  reasonsEl.innerHTML = reasons.map((r) => `<li>${r}</li>`).join("") || "<li>无</li>";
-  detailEl.textContent = JSON.stringify(detail, null, 2);
+  reasonsEl.innerHTML = reasons.length
+    ? reasons.map((r) => `<li>${escapeHTML(r)}</li>`).join("")
+    : "<li>无</li>";
+}
+
+function hitTag(hit) {
+  if (hit === null || hit === undefined) return '<span class="tag wait">待开奖</span>';
+  return hit ? '<span class="tag ok">中</span>' : '<span class="tag no">没中</span>';
 }
 
 function renderHits(payload) {
   const summaryEl = document.getElementById("hitSummary");
-  const detailEl = document.getElementById("hitDetail");
+  const body = document.getElementById("hitBody");
+  const weightEl = document.getElementById("weightList");
   const hits = payload.hits || {};
   const by = hits.by_play || {};
   const bao = by.bao_xiao || {};
   const tema = by.te_ma || {};
+  const pending = (bao.pending || 0) + (tema.pending || 0);
   summaryEl.textContent =
-    `系统推荐：包肖 ${bao.hit || 0}中/${bao.miss || 0}否 · 特码 ${tema.hit || 0}中/${tema.miss || 0}否` +
-    (bao.pending || tema.pending ? `（待开奖 ${ (bao.pending || 0) + (tema.pending || 0) }）` : "");
-  detailEl.textContent = JSON.stringify(
-    { site_weights: payload.site_weights || {}, recent: hits.items || [] },
-    null,
-    2
-  );
+    `包肖 ${bao.hit || 0} 中 / ${bao.miss || 0} 没中 · 特码 ${tema.hit || 0} 中 / ${tema.miss || 0} 没中` +
+    (pending ? ` · 待开奖 ${pending}` : "");
+
+  const grouped = new Map();
+  (hits.items || []).forEach((item) => {
+    const row = grouped.get(item.period) || { period: item.period, special: item.special_zodiac || "—" };
+    if (item.play_type === "bao_xiao") {
+      row.bao = item.zodiac;
+      row.baoHit = item.hit;
+    } else if (item.play_type === "te_ma") {
+      row.tema = item.zodiac;
+      row.temaHit = item.hit;
+    }
+    if (item.special_zodiac) row.special = item.special_zodiac;
+    grouped.set(item.period, row);
+  });
+  const rows = Array.from(grouped.values());
+  body.innerHTML = rows.length
+    ? rows
+        .map(
+          (row) => `<tr>
+            <td>${row.period}</td>
+            <td>${escapeHTML(row.bao || "—")}</td>
+            <td>${hitTag(row.baoHit)}</td>
+            <td>${escapeHTML(row.tema || "—")}</td>
+            <td>${hitTag(row.temaHit)}</td>
+            <td>${escapeHTML(row.special || "—")}</td>
+          </tr>`
+        )
+        .join("")
+    : '<tr><td colspan="6">还没有推荐记录</td></tr>';
+
+  const weights = (payload.site_weights || {}).bao_xiao || {};
+  const entries = Object.entries(weights).sort((a, b) => b[1] - a[1]);
+  weightEl.innerHTML = entries.length
+    ? entries
+        .map(([code, weight]) => {
+          const name = SITE_NAMES[code] || code;
+          return `<span class="weight"><b>${escapeHTML(name)}</b> ${Number(weight).toFixed(2)}</span>`;
+        })
+        .join("")
+    : '<span class="hint">还没有足够的站点记录</span>';
 }
 
 let settlePeriod = null;
@@ -149,14 +225,15 @@ function renderDraws(items) {
   body.innerHTML = (items || [])
     .map((d) => {
       const plains = [d.n1, d.n2, d.n3, d.n4, d.n5, d.n6]
-        .map((n) => String(n).padStart(2, "0"))
-        .join(" ");
+        .map((n) => `<span class="ball">${String(n).padStart(2, "0")}</span>`)
+        .join("");
+      const special = String(d.special).padStart(2, "0");
       return `<tr>
         <td>${d.period}</td>
-        <td>${d.draw_date || "-"}</td>
-        <td>${plains}</td>
-        <td>${String(d.special).padStart(2, "0")}</td>
-        <td>${d.special_zodiac}</td>
+        <td>${d.draw_date || "—"}</td>
+        <td class="nums">${plains}</td>
+        <td><span class="ball special">${special}</span></td>
+        <td>${escapeHTML(d.special_zodiac || "—")}</td>
       </tr>`;
     })
     .join("");

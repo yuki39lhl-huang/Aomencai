@@ -110,6 +110,10 @@ async def sync_live_data() -> dict[str, Any] | None:
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, verify=False) as client:
         resp = await client.get(settings.live_data_url)
         resp.raise_for_status()
+        body = resp.content.lstrip()
+        if not body.startswith((b"{", b"[")):
+            kind = resp.headers.get("content-type") or "unknown"
+            raise RuntimeError(f"实时开奖返回的不是 JSON（{kind}）")
         data = resp.json()
     k = str(data.get("k", ""))
     parsed = _parse_live_payload(k)

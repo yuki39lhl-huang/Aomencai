@@ -7,22 +7,9 @@ from app.repositories import delete_tips_for_period, insert_site_tip
 from app.services.zodiac import ZODIAC_ORDER
 from app.sites import TipSite, all_tip_fetch_urls, enabled_tip_sites
 
-TIP_WEIGHT = {
-    "一肖": 1.0,
-    "二肖": 0.85,
-    "三肖": 0.7,
-    "四肖": 0.55,
-    "五肖": 0.45,
-    "六肖": 0.35,
-    "七肖": 0.3,
-    "八肖": 0.25,
-    "九肖": 0.2,
-}
-
 _XIAO_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 _ZODIAC_CHARS = set("鼠牛虎兔龙蛇马羊猴鸡狗猪")
 _LABEL_RE = re.compile(r"([一二三四五六七八九])肖")
-_TEMA_MIN_SITES = 2
 
 
 def _chunks_for_period(text: str, period: int) -> list[str]:
@@ -201,23 +188,8 @@ def collapse_site_tips(tips: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def contributing_tips(tips: list[dict[str, Any]], play_type: str) -> list[dict[str, Any]]:
-    """打分用的资料。特码生肖要至少两家站点写到，才保留该生肖。"""
-    rows = [tip for tip in collapse_site_tips(tips) if tip.get("play_scope") == play_type]
-    if play_type != "te_ma":
-        return rows
-    support: dict[str, set[str]] = {}
-    for tip in rows:
-        site = str(tip.get("site_code") or "")
-        for zodiac in tip.get("zodiacs") or []:
-            support.setdefault(zodiac, set()).add(site)
-    out: list[dict[str, Any]] = []
-    for tip in rows:
-        listed = list(tip.get("zodiacs") or [])
-        agreed = [zodiac for zodiac in listed if len(support.get(zodiac, ())) >= _TEMA_MIN_SITES]
-        if not agreed:
-            continue
-        out.append({**tip, "zodiacs": agreed, "listed": listed})
-    return out
+    """打分用的资料：各站阶梯收档后，只留该玩法的那一档。"""
+    return [tip for tip in collapse_site_tips(tips) if tip.get("play_scope") == play_type]
 
 
 def _store_candidates(
@@ -335,20 +307,17 @@ def tip_scores_for_period(
     play_type: str = "bao_xiao",
     site_weights: dict[str, float] | None = None,
 ) -> dict[str, float]:
-    """阶梯收档后的资料分。特码只给两家以上写到的生肖加分。"""
+    """阶梯收档后的资料分。每个生肖只分到该档名单的一份，不再按肖数再打一层折。"""
     weights = site_weights or {}
     scores = {z: 0.0 for z in ZODIAC_ORDER}
     for tip in contributing_tips(tips, play_type):
-        listed = tip.get("listed") or tip.get("zodiacs") or []
-        zodiacs = tip.get("zodiacs") or []
-        if not listed or not zodiacs:
+        zodiacs = list(tip.get("zodiacs") or [])
+        if not zodiacs:
             continue
-        tip_type = tip.get("tip_type") or ""
-        w = TIP_WEIGHT.get(tip_type, 0.15)
-        w *= float(weights.get(str(tip.get("site_code") or ""), 1.0))
+        w = float(weights.get(str(tip.get("site_code") or ""), 1.0))
         if w <= 0:
             continue
-        focus = 1.0 / max(len(listed), 1)
+        focus = 1.0 / len(zodiacs)
         for zodiac in zodiacs:
             if zodiac in scores:
                 scores[zodiac] += w * focus

@@ -177,8 +177,10 @@ async function doRefresh() {
     const result = await fetchJSON("/api/refresh?full_history=true", { method: "POST" });
     const bao = result.recommend.bao_xiao.zodiac;
     const tema = result.recommend.te_ma.zodiac;
-    const historyDown = result.history_error || result.history_light_error;
-    const extra = historyDown ? "（历史页暂时连不上，已用最新开奖继续）" : "";
+    const notes = [];
+    if (result.live_error) notes.push("实时开奖暂时无效，已用库里的开奖继续");
+    if (result.history_error || result.history_light_error) notes.push("历史页暂时连不上");
+    const extra = notes.length ? `（${notes.join("；")}）` : "";
     setStatus(`完成：${result.recommend.period}期 包肖「${bao}」/ 特码「${tema}」${extra}`);
     await loadPanel();
   } catch (err) {

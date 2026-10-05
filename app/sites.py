@@ -4,7 +4,7 @@
 - 不把整站全文丢进打分。
 - 只保留当期期号段落里「N肖」后面个数相符的生肖串。广告句里的生肖字不算。
 - 同一条由短到长的阶梯，特码只留最短一档，包肖只留最长一档。
-- 特码生肖要至少两家站点写到才计入资料分。
+- 特码资料不进排名。包肖资料按名单均分，不再按肖数额外打折。
 """
 from __future__ import annotations
 
@@ -74,25 +74,25 @@ TIP_SITES: tuple[TipSite, ...] = (
         code="s3497",
         name="3497.com",
         entry_urls=("http://3497.com/",),
-        enabled=True,
+        enabled=False,
         prefer_frames=True,
-        note="httpx 可达；浏览器常跳安全/线路页",
+        note="已禁用：只进安全/线路页，库里没有肖名单",
     ),
     TipSite(
         code="s2549",
         name="2549.com",
         entry_urls=("http://2549.com/", "https://2549.com/"),
-        enabled=True,
+        enabled=False,
         prefer_frames=True,
-        note="httpx 可达",
+        note="已禁用：连得上但抽不到肖名单",
     ),
     TipSite(
         code="s772200",
         name="772200.com",
-        entry_urls=("https://772200.com/", "http://772200.com/"),
+        entry_urls=("https://10-3.www772200a.com:8443/#111",),
         enabled=True,
         prefer_frames=True,
-        note="httpx 可达；页面易跳百科伪装站",
+        note="王中王论坛入口，替代原 772200.com 首页",
     ),
     TipSite(
         code="s15043",
@@ -106,17 +106,17 @@ TIP_SITES: tuple[TipSite, ...] = (
         code="s19333",
         name="19333.com",
         entry_urls=("http://19333.com/",),
-        enabled=True,
+        enabled=False,
         prefer_frames=True,
-        note="https 不通，用 http",
+        note="已禁用：只有 http，库里没有肖名单",
     ),
     TipSite(
         code="s590555",
         name="590555.com",
-        entry_urls=("http://590555.com/", "https://590555.com/"),
+        entry_urls=("https://dhrhusrmfl.690333gd.app:3137/#dh1",),
         enabled=True,
         prefer_frames=True,
-        note="证书/跳转不稳，作可选源",
+        note="替代原 590555.com 首页",
     ),
     TipSite(
         code="s42054",

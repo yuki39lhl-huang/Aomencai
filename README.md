@@ -6,8 +6,8 @@
 > **特码生肖**：只有特码是该生肖才算中。  
 > 开奖近似随机，网站推荐可信度低。本工具不承诺盈利，请理性使用。
 
-站点列表与开关：[`app/sites.py`](app/sites.py)（含旧站 + `网站.md` 新站）。  
-探测备注：[`网站.md`](网站.md)。
+站点列表与开关：`[app/sites.py](app/sites.py)`（含旧站 + `网站.md` 新站）。  
+探测备注：`[网站.md](网站.md)`。
 
 ## 环境
 
@@ -34,6 +34,8 @@ python -c "from pathlib import Path; import pymysql; from app.config import sett
 python -m scripts.fix_comments
 ```
 
+
+
 ## 二、安装依赖
 
 在项目根目录 `Aomencai`：
@@ -45,6 +47,8 @@ python -m venv .venv
 pip install -r requirements.txt
 playwright install chromium
 ```
+
+
 
 ## 三、启动
 
@@ -65,18 +69,20 @@ $env:PYTHONPATH = "e:\GrammarPractice\AiProject\Aomencai"
 .\.venv\Scripts\uvicorn.exe app.main:app --host 127.0.0.1 --port 8000
 ```
 
-浏览器打开：http://127.0.0.1:8000
+浏览器打开：[http://127.0.0.1:8000](http://127.0.0.1:8000)
 
 > 需要热重载时可加 `--reload`；日常用上面命令即可。
+
+
 
 ## 四、怎么用
 
 1. 打开面板后，默认**只读数据库**（不会每次自动狂抓网站）。
 2. 首次或每天开奖前，点 **「刷新分析」**：
-   - 抓历史开奖 + 最新开奖
-   - **自动对账**已开期推荐 / 各站 tip 命中
-   - 抓站点当期推荐文（包肖与特码分开加权，差站降权）
-   - 重算并展示 **包肖** 与 **特码生肖** 各一个最看好
+  - 抓历史开奖 + 最新开奖
+  - **自动对账**已开期推荐 / 各站 tip 命中
+  - 抓站点当期推荐文（包肖与特码分开加权，差站降权）
+  - 重算并展示 **包肖** 与 **特码生肖** 各一个最看好
 3. **「仅读库刷新」**：不抓站，只重新加载已有结果。
 4. 也可命令行全量刷新：
 
@@ -92,6 +98,8 @@ python -m scripts.migrate_hit_tracking
 python -m scripts.reconcile_hits
 ```
 
+
+
 ## 五、接口
 
 - `GET /api/health` 健康检查
@@ -102,7 +110,10 @@ python -m scripts.reconcile_hits
 - `GET /api/draws` 最近开奖
 - `POST /api/refresh?full_history=true` 抓取并分析
 
+
+
 ## 说明
 
 - 表结构固定；开奖/推荐/推荐结果是动态数据。
 - 站点权重按近 N 期相对期望命中率缩放（样本少时接近 1，不剧烈抖动）。
+

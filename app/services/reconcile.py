@@ -13,7 +13,7 @@ from app.repositories import (
     update_recommend_hit,
     upsert_site_tip_hit,
 )
-from app.scrapers.tips import TIP_WEIGHT, primary_tip_for_site
+from app.scrapers.tips import primary_tip_for_site
 from app.services.zodiac import bao_xiao_hit
 
 PlayType = Literal["bao_xiao", "te_ma"]
@@ -182,4 +182,4 @@ def hit_summary(limit: int = 16) -> dict[str, Any]:
                 "special_zodiac": r.get("special_zodiac"),
             }
         )
-    return {"by_play": by_play, "items": items[:limit], "tip_weights": TIP_WEIGHT}
+    return {"by_play": by_play, "items": items[:limit]}

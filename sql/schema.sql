@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS site_tip (
   parsed_zodiacs JSON NULL COMMENT '解析出的生肖列表JSON',
   tip_type VARCHAR(32) NULL COMMENT '推荐类型：一肖/四肖/七肖/九肖等',
   play_scope VARCHAR(16) NULL COMMENT '归属玩法：bao_xiao包肖 / te_ma特码，空表示混杂不参与打分',
-  scraped_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '抓取时间',
+  scraped_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '最近一次抓取时间',
+  first_seen_at DATETIME NULL DEFAULT NULL COMMENT '第一次抓到这份名单的时间。重复刷新不改。回测只采用早于开奖21:32的记录',
   PRIMARY KEY (id),
   KEY idx_period_site (period, site_code),
   KEY idx_scraped_at (scraped_at)

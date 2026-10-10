@@ -81,6 +81,46 @@ def latest_draw() -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
+def tip_first_seen_key(
+    site_code: str,
+    play_scope: str | None,
+    tip_type: str | None,
+    zodiacs: list[str] | tuple[str, ...],
+) -> tuple[str, str, str, tuple[str, ...]]:
+    """同一期、同一站、同一档名单。重复刷新用这个键保留第一次抓到的时间。"""
+    return (
+        str(site_code or ""),
+        str(play_scope or ""),
+        str(tip_type or ""),
+        tuple(zodiacs or ()),
+    )
+
+
+def list_tip_first_seen(period: int) -> dict[tuple[str, str, str, tuple[str, ...]], datetime]:
+    """删掉重抓之前，记下每份名单最早的 first_seen_at。"""
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT site_code, play_scope, tip_type, parsed_zodiacs, first_seen_at, scraped_at
+            FROM site_tip
+            WHERE period=%s
+            """,
+            (period,),
+        )
+        rows = list(cur.fetchall())
+    earliest: dict[tuple[str, str, str, tuple[str, ...]], datetime] = {}
+    for row in rows:
+        zodiacs = _load_zodiacs(row.get("parsed_zodiacs"))
+        key = tip_first_seen_key(row.get("site_code"), row.get("play_scope"), row.get("tip_type"), zodiacs)
+        seen = row.get("first_seen_at") or row.get("scraped_at")
+        if not isinstance(seen, datetime):
+            continue
+        prev = earliest.get(key)
+        if prev is None or seen < prev:
+            earliest[key] = seen
+    return earliest
+
+
 def insert_site_tip(
     *,
     period: int,
@@ -90,13 +130,15 @@ def insert_site_tip(
     parsed_zodiacs: list[str],
     tip_type: str | None,
     play_scope: str | None = None,
+    first_seen_at: datetime | None = None,
 ) -> None:
+    seen = first_seen_at or datetime.now()
     with db_cursor() as cur:
         cur.execute(
             """
             INSERT INTO site_tip
-              (period, site_code, page_url, raw_text, parsed_zodiacs, tip_type, play_scope)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+              (period, site_code, page_url, raw_text, parsed_zodiacs, tip_type, play_scope, scraped_at, first_seen_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 period,
@@ -106,6 +148,8 @@ def insert_site_tip(
                 json.dumps(parsed_zodiacs, ensure_ascii=False),
                 tip_type,
                 play_scope,
+                datetime.now(),
+                seen,
             ),
         )
 
@@ -119,7 +163,8 @@ def list_tips(period: int) -> list[dict[str, Any]]:
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT id, period, site_code, page_url, raw_text, parsed_zodiacs, tip_type, play_scope, scraped_at
+            SELECT id, period, site_code, page_url, raw_text, parsed_zodiacs, tip_type, play_scope,
+                   scraped_at, first_seen_at
             FROM site_tip
             WHERE period=%s
             ORDER BY id DESC
@@ -128,14 +173,7 @@ def list_tips(period: int) -> list[dict[str, Any]]:
         )
         rows = list(cur.fetchall())
         for r in rows:
-            pz = r.get("parsed_zodiacs")
-            if isinstance(pz, (bytes, bytearray)):
-                pz = pz.decode("utf-8")
-            if isinstance(pz, str):
-                try:
-                    r["parsed_zodiacs"] = json.loads(pz)
-                except json.JSONDecodeError:
-                    r["parsed_zodiacs"] = []
+            r["parsed_zodiacs"] = _load_zodiacs(r.get("parsed_zodiacs"))
         return rows
 
 
@@ -144,7 +182,8 @@ def list_tips_by_period() -> dict[int, list[dict[str, Any]]]:
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT period, site_code, raw_text, parsed_zodiacs, tip_type, play_scope
+            SELECT period, site_code, raw_text, parsed_zodiacs, tip_type, play_scope,
+                   scraped_at, first_seen_at
             FROM site_tip
             ORDER BY period ASC, id ASC
             """
@@ -152,16 +191,22 @@ def list_tips_by_period() -> dict[int, list[dict[str, Any]]]:
         rows = list(cur.fetchall())
     grouped: dict[int, list[dict[str, Any]]] = {}
     for row in rows:
-        pz = row.get("parsed_zodiacs")
-        if isinstance(pz, (bytes, bytearray)):
-            pz = pz.decode("utf-8")
-        if isinstance(pz, str):
-            try:
-                row["parsed_zodiacs"] = json.loads(pz)
-            except json.JSONDecodeError:
-                row["parsed_zodiacs"] = []
+        row["parsed_zodiacs"] = _load_zodiacs(row.get("parsed_zodiacs"))
         grouped.setdefault(int(row["period"]), []).append(row)
     return grouped
+
+
+def _load_zodiacs(value: Any) -> list[str]:
+    if isinstance(value, (bytes, bytearray)):
+        value = value.decode("utf-8")
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return []
 
 
 def ensure_backtest_table() -> None:

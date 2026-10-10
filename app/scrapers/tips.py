@@ -3,7 +3,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.repositories import delete_tips_for_period, insert_site_tip
+from app.repositories import (
+    delete_tips_for_period,
+    insert_site_tip,
+    list_tip_first_seen,
+    tip_first_seen_key,
+)
 from app.services.zodiac import ZODIAC_ORDER
 from app.sites import TipSite, all_tip_fetch_urls, enabled_tip_sites
 
@@ -193,7 +198,11 @@ def contributing_tips(tips: list[dict[str, Any]], play_type: str) -> list[dict[s
 
 
 def _store_candidates(
-    period: int, site_code: str, url: str, candidates: list[dict[str, Any]]
+    period: int,
+    site_code: str,
+    url: str,
+    candidates: list[dict[str, Any]],
+    prior_seen: dict[tuple[str, str, str, tuple[str, ...]], datetime] | None = None,
 ) -> tuple[int, list[str]]:
     saved = 0
     strategies: list[str] = []
@@ -214,14 +223,18 @@ def _store_candidates(
         zodiacs = item.get("zodiacs") or []
         strategy = str(item.get("strategy") or "unknown")
         raw = f"[{strategy}] {item.get('raw') or ''}"
+        scope = item.get("play_scope")
+        tip_type = item.get("tip_type")
+        seen_key = tip_first_seen_key(site_code, scope, tip_type, zodiacs)
         insert_site_tip(
             period=period,
             site_code=site_code,
             page_url=url,
             raw_text=raw[:5000],
             parsed_zodiacs=zodiacs,
-            tip_type=item.get("tip_type"),
-            play_scope=item.get("play_scope"),
+            tip_type=tip_type,
+            play_scope=scope,
+            first_seen_at=(prior_seen or {}).get(seen_key),
         )
         saved += 1
         if strategy not in strategies:
@@ -243,7 +256,11 @@ async def _fetch_text(url: str, prefer_frames: bool) -> str:
     return text
 
 
-async def scrape_tip_site(period: int, site: TipSite) -> dict[str, Any]:
+async def scrape_tip_site(
+    period: int,
+    site: TipSite,
+    prior_seen: dict[tuple[str, str, str, tuple[str, ...]], datetime] | None = None,
+) -> dict[str, Any]:
     total = 0
     used: list[str] = []
     strategies_used: list[str] = []
@@ -259,7 +276,7 @@ async def scrape_tip_site(period: int, site: TipSite) -> dict[str, Any]:
         try:
             text = await _fetch_text(url, prefer)
             candidates = extract_candidates(text, period)
-            n, st = _store_candidates(period, site.code, url, candidates)
+            n, st = _store_candidates(period, site.code, url, candidates, prior_seen)
             total += n
             used.append(url)
             for s in st:
@@ -290,10 +307,11 @@ async def scrape_tip_site(period: int, site: TipSite) -> dict[str, Any]:
 
 
 async def sync_tips(period: int) -> dict[str, Any]:
+    prior_seen = list_tip_first_seen(period)
     delete_tips_for_period(period)
     results: dict[str, Any] = {"period": period, "sites": []}
     for site in enabled_tip_sites():
-        item = await scrape_tip_site(period, site)
+        item = await scrape_tip_site(period, site, prior_seen)
         results["sites"].append(item)
         results[site.code] = item
     results["saved_total"] = sum(int(s.get("saved") or 0) for s in results["sites"])

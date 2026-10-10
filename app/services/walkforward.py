@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from datetime import date, datetime, time
 from typing import Any
 
 from app.config import settings
@@ -25,6 +26,8 @@ from app.services.scoring import (
 from app.services.zodiac import ZODIAC_ORDER, bao_xiao_hit, zodiac_numbers
 
 _START = 40
+_DRAW_CLOCK = time(21, 32)
+_RULE = "pre_draw_21_32"
 
 
 def _comb(n: int, k: int) -> int:
@@ -94,6 +97,19 @@ def _current_winner(
     )
 
 
+def _known_before_draw(tip: dict[str, Any], draw: dict[str, Any]) -> bool:
+    """只有第一次抓到的时间早于该期开奖 21:32，才算预测时已经看得到。"""
+    draw_day = draw.get("draw_date")
+    if isinstance(draw_day, datetime):
+        draw_day = draw_day.date()
+    if not isinstance(draw_day, date):
+        return False
+    seen = tip.get("first_seen_at") or tip.get("scraped_at")
+    if not isinstance(seen, datetime):
+        return False
+    return seen < datetime.combine(draw_day, _DRAW_CLOCK)
+
+
 def run_walkforward() -> dict[str, Any] | None:
     draws = list_draws_asc()
     if len(draws) <= _START:
@@ -110,6 +126,9 @@ def run_walkforward() -> dict[str, Any] | None:
     tema_tip_base = 0.0
     tema_tip_n = 0
     by_count: dict[int, list[int]] = {}
+    bao_used = 0
+    bao_skipped = 0
+    tema_skipped = 0
 
     for i in range(_START, len(draws)):
         history = draws[:i]
@@ -120,7 +139,11 @@ def run_walkforward() -> dict[str, Any] | None:
         omit_b = _omit_bao(history)
         hot_t = _hot_tema(history, settings.hot_window)
         hot_b = _hot_bao(history, settings.hot_window)
-        tips = tips_by_period.get(period, [])
+        stored = tips_by_period.get(period, [])
+        tips = [tip for tip in stored if _known_before_draw(tip, row)]
+        bao_used += len(contributing_tips(tips, "bao_xiao"))
+        bao_skipped += len(contributing_tips(stored, "bao_xiao")) - len(contributing_tips(tips, "bao_xiao"))
+        tema_skipped += len(contributing_tips(stored, "te_ma")) - len(contributing_tips(tips, "te_ma"))
         bao_tips = contributing_tips(tips, "bao_xiao")
         if bao_tips:
             weights = site_weights_for_period("bao_xiao", period)
@@ -174,10 +197,17 @@ def run_walkforward() -> dict[str, Any] | None:
         tip_note = "特码资料覆盖高于名单基准，仍不自动加进排名。"
         keep_zero = False
     else:
-        tip_note = "这些期里没有特码名单。"
+        tip_note = "这些期里没有开奖前就能看到的特码名单。"
         keep_zero = True
+    tip_note += (
+        f" 包肖资料只采用第一次抓到时间早于开奖 21:32 的名单：用了 {bao_used} 条，"
+        f"来不及证明的 {bao_skipped} 条没有进入现行公式。"
+    )
+    if tema_skipped:
+        tip_note += f" 特码对照同样去掉来不及证明的 {tema_skipped} 条。"
 
     return {
+        "rule": _RULE,
         "from_period": int(draws[_START]["period"]),
         "through_period": int(draws[-1]["period"]),
         "n": n,
@@ -210,7 +240,9 @@ def run_walkforward() -> dict[str, Any] | None:
 def refresh_backtest_if_needed(latest_drawn_period: int) -> dict[str, Any]:
     """新开奖期还没对照过时才重算。同一期重复刷新直接沿用上次结果。"""
     current = latest_backtest_snapshot()
-    if current and int(current.get("through_period") or 0) >= latest_drawn_period:
+    same_period = current and int(current.get("through_period") or 0) >= latest_drawn_period
+    same_rule = bool(current) and current.get("rule") == _RULE
+    if same_period and same_rule:
         return {"updated": False, "snapshot": current}
     snapshot = run_walkforward()
     if not snapshot:

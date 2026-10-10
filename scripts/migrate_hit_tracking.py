@@ -68,6 +68,22 @@ def main() -> None:
         elif _table_exists(cur, "site_tip_hit"):
             print("site_tip_hit.list_hit exists")
 
+        if _table_exists(cur, "site_tip") and not _column_exists(cur, "site_tip", "first_seen_at"):
+            cur.execute(
+                """
+                ALTER TABLE site_tip
+                  ADD COLUMN first_seen_at DATETIME NULL DEFAULT NULL
+                  COMMENT '第一次抓到这份名单的时间。重复刷新不改。回测只采用早于开奖21:32的记录'
+                  AFTER scraped_at
+                """
+            )
+            cur.execute(
+                "UPDATE site_tip SET first_seen_at = scraped_at WHERE first_seen_at IS NULL"
+            )
+            print("added site_tip.first_seen_at")
+        elif _table_exists(cur, "site_tip"):
+            print("site_tip.first_seen_at exists")
+
         if not _table_exists(cur, "site_tip_hit"):
             cur.execute(
                 """

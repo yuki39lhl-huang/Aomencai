@@ -24,7 +24,7 @@ from app.services.scoring import (
     _omit_tema,
     _scaled_component,
 )
-from app.services.zodiac import ZODIAC_ORDER, bao_xiao_hit, zodiac_numbers
+from app.services.zodiac import ZODIAC_ORDER, bao_xiao_hit, lunar_year_for, zodiac_numbers
 
 _START = 40
 _DRAW_CLOCK = time(21, 32)
@@ -37,11 +37,11 @@ def _comb(n: int, k: int) -> int:
     return math.comb(n, k)
 
 
-def bao_cover_rate(zodiacs: list[str]) -> float:
+def bao_cover_rate(zodiacs: list[str], year: int) -> float:
     """k 个生肖至少有一个出现在 7 个号码里的概率。"""
     covered: set[int] = set()
     for zodiac in zodiacs:
-        covered.update(zodiac_numbers(zodiac, settings.lunar_year))
+        covered.update(zodiac_numbers(zodiac, year))
     outside = 49 - len(covered)
     total = _comb(49, 7)
     if total <= 0:
@@ -49,7 +49,7 @@ def bao_cover_rate(zodiacs: list[str]) -> float:
     return 1.0 - _comb(outside, 7) / total
 
 
-def all_present_rate(zodiacs: list[str]) -> float:
+def all_present_rate(zodiacs: list[str], year: int) -> float:
     """这几个生肖全部出现在 7 个号码里的概率（容斥）。"""
     total = _comb(49, 7)
     if total <= 0:
@@ -59,7 +59,7 @@ def all_present_rate(zodiacs: list[str]) -> float:
         for sub in combinations(zodiacs, r):
             covered: set[int] = set()
             for zodiac in sub:
-                covered.update(zodiac_numbers(zodiac, settings.lunar_year))
+                covered.update(zodiac_numbers(zodiac, year))
             acc += (-1) ** r * _comb(49 - len(covered), 7) / total
     return acc
 
@@ -146,7 +146,8 @@ def run_walkforward() -> dict[str, Any] | None:
         name: {"tema": 0, "bao": 0, "n": 0}
         for name in ("cold", "gap", "hot", "current")
     }
-    single_bao = sum(bao_cover_rate([z]) for z in ZODIAC_ORDER) / len(ZODIAC_ORDER)
+    this_year = lunar_year_for(None)
+    single_bao = sum(bao_cover_rate([z], this_year) for z in ZODIAC_ORDER) / len(ZODIAC_ORDER)
     tips_by_period = list_tips_by_period()
 
     tema_tip_hit = 0
@@ -197,7 +198,7 @@ def run_walkforward() -> dict[str, Any] | None:
         for size, bucket in lian.items():
             group = bao_ranked[:size]
             bucket["hits"] += int(all(bao_xiao_hit(z, row) for z in group))
-            bucket["expected"] += all_present_rate(group)
+            bucket["expected"] += all_present_rate(group, lunar_year_for(row.get("draw_date")))
         for name, (tema_z, bao_z) in picks.items():
             stats[name]["n"] += 1
             stats[name]["tema"] += int(tema_z == special)

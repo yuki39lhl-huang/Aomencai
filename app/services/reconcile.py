@@ -31,7 +31,7 @@ def _evaluate_zodiacs(
     if not zodiacs:
         return False
     if play_type == "bao_xiao":
-        return any(bao_xiao_hit(z, draw, settings.lunar_year) for z in zodiacs)
+        return any(bao_xiao_hit(z, draw) for z in zodiacs)
     return any(_tema_hit(z, draw) for z in zodiacs)
 
 
@@ -58,12 +58,12 @@ def reconcile_recommend_period(period: int) -> list[dict[str, Any]]:
             )
             continue
         if play == "bao_xiao":
-            hit = bao_xiao_hit(zodiac, draw, settings.lunar_year)
+            hit = bao_xiao_hit(zodiac, draw)
         elif play in LIAN_SIZES:
             group = row.get("zodiacs") or []
             if len(group) != LIAN_SIZES[play]:
                 continue
-            hit = all(bao_xiao_hit(z, draw, settings.lunar_year) for z in group)
+            hit = all(bao_xiao_hit(z, draw) for z in group)
         else:
             hit = _tema_hit(zodiac, draw)
         update_recommend_hit(period, play, hit)

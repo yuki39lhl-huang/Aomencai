@@ -1,5 +1,5 @@
 -- 可选：手工重建表（会清空数据）。默认流程不要执行本文件。
--- 执行后请再跑：mysql -uroot -p1234 aomencai < sql/schema.sql
+-- 执行后请再跑：mysql -u<用户> -p aomencai < sql/schema.sql
 USE aomencai;
 
 SET FOREIGN_KEY_CHECKS = 0;

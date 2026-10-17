@@ -97,7 +97,7 @@ def tip_first_seen_key(
 
 
 def list_tip_first_seen(period: int) -> dict[tuple[str, str, str, tuple[str, ...]], datetime]:
-    """删掉重抓之前，记下每份名单最早的 first_seen_at。"""
+    """重抓替换之前，记下每份名单最早的 first_seen_at。"""
     with db_cursor() as cur:
         cur.execute(
             """
@@ -121,42 +121,38 @@ def list_tip_first_seen(period: int) -> dict[tuple[str, str, str, tuple[str, ...
     return earliest
 
 
-def insert_site_tip(
-    *,
-    period: int,
-    site_code: str,
-    page_url: str,
-    raw_text: str,
-    parsed_zodiacs: list[str],
-    tip_type: str | None,
-    play_scope: str | None = None,
-    first_seen_at: datetime | None = None,
-) -> None:
-    seen = first_seen_at or datetime.now()
+def replace_site_tips(period: int, rows_by_site: dict[str, list[dict[str, Any]]]) -> None:
+    """一个事务里按站替换本期名单。不在 rows_by_site 里的站，旧名单原样保留。"""
+    if not rows_by_site:
+        return
+    now = datetime.now()
     with db_cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO site_tip
-              (period, site_code, page_url, raw_text, parsed_zodiacs, tip_type, play_scope, scraped_at, first_seen_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                period,
-                site_code,
-                page_url[:500],
-                raw_text,
-                json.dumps(parsed_zodiacs, ensure_ascii=False),
-                tip_type,
-                play_scope,
-                datetime.now(),
-                seen,
-            ),
-        )
-
-
-def delete_tips_for_period(period: int) -> None:
-    with db_cursor() as cur:
-        cur.execute("DELETE FROM site_tip WHERE period=%s", (period,))
+        for site_code, rows in rows_by_site.items():
+            cur.execute(
+                "DELETE FROM site_tip WHERE period=%s AND site_code=%s", (period, site_code)
+            )
+            cur.executemany(
+                """
+                INSERT INTO site_tip
+                  (period, site_code, page_url, raw_text, parsed_zodiacs, tip_type, play_scope,
+                   scraped_at, first_seen_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    (
+                        period,
+                        site_code,
+                        str(row["page_url"])[:500],
+                        row["raw_text"],
+                        json.dumps(row["parsed_zodiacs"], ensure_ascii=False),
+                        row.get("tip_type"),
+                        row.get("play_scope"),
+                        now,
+                        row.get("first_seen_at") or now,
+                    )
+                    for row in rows
+                ],
+            )
 
 
 def list_tips(period: int) -> list[dict[str, Any]]:

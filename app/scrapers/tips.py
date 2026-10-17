@@ -4,9 +4,8 @@ import re
 from typing import Any
 
 from app.repositories import (
-    delete_tips_for_period,
-    insert_site_tip,
     list_tip_first_seen,
+    replace_site_tips,
     tip_first_seen_key,
 )
 from app.services.zodiac import ZODIAC_ORDER
@@ -197,14 +196,13 @@ def contributing_tips(tips: list[dict[str, Any]], play_type: str) -> list[dict[s
     return [tip for tip in collapse_site_tips(tips) if tip.get("play_scope") == play_type]
 
 
-def _store_candidates(
-    period: int,
+def _rows_from_candidates(
     site_code: str,
     url: str,
     candidates: list[dict[str, Any]],
     prior_seen: dict[tuple[str, str, str, tuple[str, ...]], datetime] | None = None,
-) -> tuple[int, list[str]]:
-    saved = 0
+) -> tuple[list[dict[str, Any]], list[str]]:
+    rows: list[dict[str, Any]] = []
     strategies: list[str] = []
     picked: list[dict[str, Any]] = []
     per_scope = {"bao_xiao": 0, "te_ma": 0}
@@ -226,20 +224,19 @@ def _store_candidates(
         scope = item.get("play_scope")
         tip_type = item.get("tip_type")
         seen_key = tip_first_seen_key(site_code, scope, tip_type, zodiacs)
-        insert_site_tip(
-            period=period,
-            site_code=site_code,
-            page_url=url,
-            raw_text=raw[:5000],
-            parsed_zodiacs=zodiacs,
-            tip_type=tip_type,
-            play_scope=scope,
-            first_seen_at=(prior_seen or {}).get(seen_key),
+        rows.append(
+            {
+                "page_url": url,
+                "raw_text": raw[:5000],
+                "parsed_zodiacs": zodiacs,
+                "tip_type": tip_type,
+                "play_scope": scope,
+                "first_seen_at": (prior_seen or {}).get(seen_key),
+            }
         )
-        saved += 1
         if strategy not in strategies:
             strategies.append(strategy)
-    return saved, strategies
+    return rows, strategies
 
 
 async def _fetch_text(url: str, prefer_frames: bool) -> str:
@@ -261,7 +258,8 @@ async def scrape_tip_site(
     site: TipSite,
     prior_seen: dict[tuple[str, str, str, tuple[str, ...]], datetime] | None = None,
 ) -> dict[str, Any]:
-    total = 0
+    """只抓不写库。抓到的名单放在 rows 里，由 sync_tips 统一替换。"""
+    rows: list[dict[str, Any]] = []
     used: list[str] = []
     strategies_used: list[str] = []
     prefer = site.prefer_frames or "dinggeshui" in site.code
@@ -276,13 +274,13 @@ async def scrape_tip_site(
         try:
             text = await _fetch_text(url, prefer)
             candidates = extract_candidates(text, period)
-            n, st = _store_candidates(period, site.code, url, candidates, prior_seen)
-            total += n
+            found, st = _rows_from_candidates(site.code, url, candidates, prior_seen)
             used.append(url)
             for s in st:
                 if s not in strategies_used:
                     strategies_used.append(s)
-            if n > 0:
+            if found:
+                rows = found
                 break
             # 主 URL 抽不到：发现子链接换源再比
             if not tried_extra:
@@ -299,7 +297,8 @@ async def scrape_tip_site(
     return {
         "site": site.code,
         "name": site.name,
-        "saved": total,
+        "saved": len(rows),
+        "rows": rows,
         "urls": used,
         "strategies": strategies_used,
         "note": site.note,
@@ -307,14 +306,20 @@ async def scrape_tip_site(
 
 
 async def sync_tips(period: int) -> dict[str, Any]:
+    """全部站抓完后再替换。这次没抓到名单的站保留上次的名单，避免一次超时让分数跳动。"""
     prior_seen = list_tip_first_seen(period)
-    delete_tips_for_period(period)
     results: dict[str, Any] = {"period": period, "sites": []}
+    fresh: dict[str, list[dict[str, Any]]] = {}
     for site in enabled_tip_sites():
         item = await scrape_tip_site(period, site, prior_seen)
+        rows = item.pop("rows")
+        if rows:
+            fresh[site.code] = rows
         results["sites"].append(item)
         results[site.code] = item
-    results["saved_total"] = sum(int(s.get("saved") or 0) for s in results["sites"])
+    replace_site_tips(period, fresh)
+    results["saved_total"] = sum(len(rows) for rows in fresh.values())
+    results["kept_sites"] = [s["site"] for s in results["sites"] if not s["saved"]]
     return results
 
 

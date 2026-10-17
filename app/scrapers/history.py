@@ -8,7 +8,7 @@ import httpx
 
 from app.config import settings
 from app.repositories import upsert_draw
-from app.services.zodiac import number_to_zodiac
+from app.services.zodiac import lunar_year_for, number_to_zodiac
 
 NUM_ZODIAC_RE = re.compile(r"(?P<num>\d{1,2})\s*(?P<zodiac>[鼠牛虎兔龙蛇马羊猴鸡狗猪])")
 PERIOD_BLOCK_RE = re.compile(
@@ -36,7 +36,7 @@ def parse_history_text(text: str) -> list[dict[str, Any]]:
                 "draw_date": draw_date,
                 "numbers": plains,
                 "special": special,
-                "special_zodiac": number_to_zodiac(special, settings.lunar_year),
+                "special_zodiac": number_to_zodiac(special, lunar_year_for(draw_date)),
             }
         )
     return results
@@ -87,7 +87,7 @@ def _parse_live_payload(k: str) -> dict[str, Any] | None:
             "period": period,
             "numbers": plains,
             "special": special,
-            "special_zodiac": number_to_zodiac(special, settings.lunar_year),
+            "special_zodiac": number_to_zodiac(special, lunar_year_for(None)),
             "next_period": next_period,
             "waiting_period": next_period,
             "raw": k,

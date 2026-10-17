@@ -6,10 +6,11 @@ from app.sites import HISTORY_SOURCE, LIVE_SOURCE
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    # 账号密码只从 .env 或环境变量读，仓库里不放默认密码
     db_host: str = "127.0.0.1"
     db_port: int = 3306
-    db_user: str = "root"
-    db_password: str = "1234"
+    db_user: str = ""
+    db_password: str = ""
     db_name: str = "aomencai"
 
     # 开奖源默认取 app.sites 配置；可用环境变量覆盖
@@ -38,8 +39,6 @@ class Settings(BaseSettings):
     # 单肖包肖 / 特码经验期望（用于相对降权，非绝对准确率）
     expected_hit_bao: float = 0.42
     expected_hit_tema: float = 0.09
-
-    lunar_year: int = 2026
 
 
 settings = Settings()

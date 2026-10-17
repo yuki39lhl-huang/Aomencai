@@ -23,7 +23,7 @@ def _omit_bao(draws: list[dict[str, Any]]) -> dict[str, int]:
     for z in ZODIAC_ORDER:
         count = 0
         for row in reversed(draws):
-            if bao_xiao_hit(z, row, settings.lunar_year):
+            if bao_xiao_hit(z, row):
                 break
             count += 1
         else:
@@ -38,7 +38,7 @@ def _hot_bao(draws: list[dict[str, Any]], window: int) -> dict[str, int]:
     hot = {z: 0 for z in ZODIAC_ORDER}
     for row in recent:
         for z in ZODIAC_ORDER:
-            if bao_xiao_hit(z, row, settings.lunar_year):
+            if bao_xiao_hit(z, row):
                 hot[z] += 1
     return hot
 

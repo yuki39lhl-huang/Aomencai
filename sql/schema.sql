@@ -41,15 +41,16 @@ CREATE TABLE IF NOT EXISTS site_tip (
 CREATE TABLE IF NOT EXISTS recommend_log (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   period INT UNSIGNED NOT NULL COMMENT '预测期号',
-  play_type VARCHAR(16) NOT NULL DEFAULT 'bao_xiao' COMMENT '玩法：bao_xiao包肖 / te_ma特码生肖',
-  zodiac VARCHAR(8) NOT NULL COMMENT '该玩法最看好生肖',
+  play_type VARCHAR(16) NOT NULL DEFAULT 'bao_xiao' COMMENT '玩法：bao_xiao单肖 / lian3三连肖 / lian5五连肖 / te_ma特码生肖',
+  zodiac VARCHAR(8) NOT NULL COMMENT '该玩法最看好生肖。连肖此列是整组第一名',
+  zodiacs JSON NULL DEFAULT NULL COMMENT '连肖整组生肖，按分数从高到低。单肖、特码不用',
   score DECIMAL(10, 4) NOT NULL COMMENT '综合得分',
   score_detail JSON NOT NULL COMMENT '分项得分详情JSON',
-  hit TINYINT NULL DEFAULT NULL COMMENT '对账：NULL未开奖 1中 0否',
+  hit TINYINT NULL DEFAULT NULL COMMENT '对账：NULL未开奖 1中 0否。单肖只看冠军，连肖要整组都出现在7个号码里',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '生成时间',
   PRIMARY KEY (id),
   UNIQUE KEY uk_period_play (period, play_type)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='每期推荐快照（包肖/特码分行）';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='每期推荐快照（单肖/三连肖/五连肖/特码分行）';
 
 CREATE TABLE IF NOT EXISTS site_tip_hit (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',

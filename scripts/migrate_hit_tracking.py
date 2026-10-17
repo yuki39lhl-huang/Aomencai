@@ -55,6 +55,25 @@ def main() -> None:
         else:
             print("recommend_log.hit exists")
 
+        if not _column_exists(cur, "recommend_log", "zodiacs"):
+            cur.execute(
+                """
+                ALTER TABLE recommend_log
+                  ADD COLUMN zodiacs JSON NULL DEFAULT NULL
+                  COMMENT '连肖整组生肖，按分数从高到低。单肖、特码不用'
+                  AFTER zodiac
+                """
+            )
+            print("added recommend_log.zodiacs")
+        else:
+            print("recommend_log.zodiacs exists")
+
+        # 包肖亚军/季军已改由 lian3 行记录，旧列不再使用
+        for column in ("zodiac_2", "zodiac_3", "hit_2", "hit_3"):
+            if _column_exists(cur, "recommend_log", column):
+                cur.execute(f"ALTER TABLE recommend_log DROP COLUMN {column}")
+                print(f"dropped recommend_log.{column}")
+
         if _table_exists(cur, "site_tip_hit") and not _column_exists(cur, "site_tip_hit", "list_hit"):
             cur.execute(
                 """

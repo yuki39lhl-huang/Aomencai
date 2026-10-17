@@ -1,8 +1,9 @@
 # 澳门彩生肖助手
 
-本地娱乐工具：抓取开奖历史与站点推荐文，**同时给出包肖与特码生肖各一个最看好**。
+本地娱乐工具：抓取开奖历史与站点推荐文，每期给出**单肖、三连肖、五连肖、特码生肖**四种推荐，各记各的中没中。
 
-> **包肖**：6 平码 + 1 特码中，**任意一个**是该生肖即算中。  
+> **单肖**：6 平码 + 1 特码中，**任意一个**是该生肖即算中。  
+> **三连肖 / 五连肖**：同一排名的前 3 / 前 5 名，**全部**出现在这 7 个号码里才算中。  
 > **特码生肖**：只有特码是该生肖才算中。  
 > 开奖近似随机，网站推荐可信度低。本工具不承诺盈利，请理性使用。
 
@@ -27,14 +28,6 @@ $env:PYTHONPATH = "e:\GrammarPractice\AiProject\Aomencai"
 python -c "from pathlib import Path; import pymysql; from app.config import settings; sql=Path('sql/schema.sql').read_text(encoding='utf-8'); conn=pymysql.connect(host=settings.db_host,port=settings.db_port,user=settings.db_user,password=settings.db_password,charset='utf8mb4',autocommit=True); cur=conn.cursor(); cur.execute('SET NAMES utf8mb4');
 [cur.execute(s) for s in sql.replace('USE aomencai;','').split(';') if s.strip()]; conn.close(); print('schema ok')"
 ```
-
-若注释已乱码，执行修复：
-
-```powershell
-python -m scripts.fix_comments
-```
-
-
 
 ## 二、安装依赖
 
@@ -78,11 +71,11 @@ $env:PYTHONPATH = "e:\GrammarPractice\AiProject\Aomencai"
 ## 四、怎么用
 
 1. 打开面板后，默认**只读数据库**（不会每次自动狂抓网站）。
-2. 首次或每天开奖前，点 **「刷新分析」**：
+2. 每天点两次 **「刷新分析」**：开奖前 21:00–21:20 一次定推荐，21:32 开奖后一次对账。每次会：
   - 抓历史开奖 + 最新开奖
-  - **自动对账**已开期推荐 / 各站 tip 命中
+  - **自动对账**已开期推荐 / 各站 tip 命中（三连肖、五连肖只自动对账，不手填）
   - 抓站点当期推荐文（包肖资料按 0.15 参与排名，差站只缩放这一档；特码资料只抓取和对账，不进排名）
-  - 重算并展示 **包肖** 与 **特码生肖** 各一个最看好
+  - 重算并展示单肖、三连肖、五连肖、特码生肖。已有中没中的期不再改
 3. **「仅读库刷新」**：不抓站，只重新加载已有结果。
 4. 也可命令行全量刷新：
 
@@ -103,9 +96,8 @@ python -m scripts.reconcile_hits
 ## 五、接口
 
 - `GET /api/health` 健康检查
-- `GET /api/latest-recommend` 最新包肖 + 特码推荐（含命中汇总、站点权重）
-- `GET /api/hit-stats` 对账与站点权重
-- `POST /api/manual-hit` 开奖后手动写入包肖/特码中没中（已写入的不会被自动对账覆盖）
+- `GET /api/latest-recommend` 最新四种推荐（含命中汇总、站点权重、公式对照）
+- `POST /api/manual-hit` 开奖后手动改正单肖/特码中没中（已写入的不会被自动对账覆盖）
 - `POST /api/reconcile` 仅回填尚未录入的对账
 - `GET /api/draws` 最近开奖
 - `POST /api/refresh?full_history=true` 抓取并分析

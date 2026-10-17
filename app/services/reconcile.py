@@ -18,6 +18,8 @@ from app.services.zodiac import bao_xiao_hit
 
 PlayType = Literal["bao_xiao", "te_ma"]
 
+LIAN_SIZES = {"lian3": 3, "lian5": 5}
+
 
 def _tema_hit(zodiac: str, draw: dict[str, Any]) -> bool:
     return zodiac == draw.get("special_zodiac")
@@ -57,6 +59,11 @@ def reconcile_recommend_period(period: int) -> list[dict[str, Any]]:
             continue
         if play == "bao_xiao":
             hit = bao_xiao_hit(zodiac, draw, settings.lunar_year)
+        elif play in LIAN_SIZES:
+            group = row.get("zodiacs") or []
+            if len(group) != LIAN_SIZES[play]:
+                continue
+            hit = all(bao_xiao_hit(z, draw, settings.lunar_year) for z in group)
         else:
             hit = _tema_hit(zodiac, draw)
         update_recommend_hit(period, play, hit)
@@ -169,12 +176,13 @@ def site_weights_for_period(
 
 
 def hit_summary(limit: int = 16) -> dict[str, Any]:
+    """最近 limit 期的推荐与战绩。各玩法各记各的。"""
     from app.repositories import list_recent_recommend_hits
 
-    rows = list_recent_recommend_hits(limit=limit * 2)
+    rows = list_recent_recommend_hits(periods=limit)
     by_play: dict[str, dict[str, int]] = {
-        "bao_xiao": {"hit": 0, "miss": 0, "pending": 0},
-        "te_ma": {"hit": 0, "miss": 0, "pending": 0},
+        play: {"hit": 0, "miss": 0, "pending": 0}
+        for play in ("bao_xiao", "lian3", "lian5", "te_ma")
     }
     items: list[dict[str, Any]] = []
     for r in rows:
@@ -192,8 +200,9 @@ def hit_summary(limit: int = 16) -> dict[str, Any]:
                 "period": r["period"],
                 "play_type": play,
                 "zodiac": r["zodiac"],
+                "zodiacs": r.get("zodiacs"),
                 "hit": None if hit is None else bool(int(hit)),
                 "special_zodiac": r.get("special_zodiac"),
             }
         )
-    return {"by_play": by_play, "items": items[:limit]}
+    return {"by_play": by_play, "items": items}

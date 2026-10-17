@@ -4,19 +4,19 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>澳门彩生肖助手</title>
-  <link rel="stylesheet" href="/static/style.css?v=8" />
+  <link rel="stylesheet" href="/static/style.css?v=13" />
 </head>
 <body>
   <div class="page">
     <header class="hero">
       <p class="brand">Aomencai</p>
       <h1>本期最看好</h1>
-      <p class="sub">本地娱乐分析 · 包肖与特码分开展示 · 各给一个生肖</p>
+      <p class="sub">本地娱乐分析 · 单肖、三连肖、五连肖、特码分开记中没中</p>
       <p id="periodMeta" class="meta">尚未分析</p>
 
       <div class="dual">
         <div class="pick">
-          <p class="pick-label">包肖</p>
+          <p class="pick-label">单肖</p>
           <p class="pick-rule">7码任一开出该肖即中</p>
           <div id="zodiacBao" class="zodiac">—</div>
           <p id="metaBao" class="pick-meta"></p>
@@ -29,21 +29,60 @@
           <p id="metaTema" class="pick-meta"></p>
           <ul id="reasonsTema" class="reasons"></ul>
         </div>
+        <div class="pick">
+          <p class="pick-label">三连肖</p>
+          <p class="pick-rule">3个生肖都出现在7码里才中 · 靠运气约 8%</p>
+          <div id="groupLian3" class="group lian3"></div>
+          <p id="metaLian3" class="pick-meta"></p>
+        </div>
+        <div class="pick">
+          <p class="pick-label">五连肖</p>
+          <p class="pick-rule">5个生肖都出现在7码里才中 · 靠运气不到 1%</p>
+          <div id="groupLian5" class="group lian5"></div>
+          <p id="metaLian5" class="pick-meta"></p>
+        </div>
       </div>
 
       <div class="actions">
         <button id="btnRefresh" type="button">刷新分析</button>
         <button id="btnReload" class="ghost" type="button">仅读库刷新</button>
       </div>
+      <p id="refreshTip" class="refresh-tip"></p>
+      <p class="hint">建议每天刷新两次：开奖前 21:00–21:20 一次定推荐，21:32 开奖后一次对账。</p>
       <p id="status" class="status"></p>
     </header>
 
+    <section class="block">
+      <h2>近期推荐</h2>
+      <div id="hitSummary" class="stats"></div>
+      <div class="table-wrap">
+        <table class="hit-table">
+          <thead>
+            <tr>
+              <th>期号</th>
+              <th>单肖</th>
+              <th>三连肖</th>
+              <th>五连肖</th>
+              <th>特码</th>
+              <th>开奖特肖</th>
+            </tr>
+          </thead>
+          <tbody id="hitBody" class="collapsed"></tbody>
+        </table>
+      </div>
+      <button class="ghost more" type="button" data-toggle="hitBody" hidden>展开全部</button>
+      <h3 class="subhead">包肖站点权重</h3>
+      <p class="hint">单肖只看第一名。三连肖、五连肖取同一排名的前 3 / 前 5 名，整组全出才算中，各记各的。站点权重按各站「只荐一肖」缩放，名单更长不加分，特码资料不进排名。</p>
+      <div id="weightList" class="weights"></div>
+    </section>
+
     <section class="block" id="manualHit" hidden>
-      <h2>开奖后录入中没中</h2>
+      <h2>手动改正中没中</h2>
+      <p class="hint">开奖后点「刷新分析」会自动对账，一般不用填。只有发现记错时才在这里改单肖或特码。三连肖、五连肖只按开奖号码自动判断。</p>
       <p id="manualMeta" class="meta"></p>
       <div class="dual hit-choices">
         <fieldset class="hit-field">
-          <legend>包肖</legend>
+          <legend>单肖</legend>
           <label><input type="radio" name="baoHit" value="1" /> 中</label>
           <label><input type="radio" name="baoHit" value="0" /> 没中</label>
         </fieldset>
@@ -56,30 +95,6 @@
       <div class="actions">
         <button id="btnManualHit" type="button">写入中没中</button>
       </div>
-      <p class="hint">同一期只保留最新一次。写入后记入面板上的中/否战绩，刷新分析不会再改你手填的结果。</p>
-    </section>
-
-    <section class="block">
-      <h2>近期推荐</h2>
-      <p id="hitSummary" class="meta"></p>
-      <div class="table-wrap">
-        <table class="hit-table">
-          <thead>
-            <tr>
-              <th>期号</th>
-              <th>包肖</th>
-              <th>结果</th>
-              <th>特码</th>
-              <th>结果</th>
-              <th>开奖特肖</th>
-            </tr>
-          </thead>
-          <tbody id="hitBody"></tbody>
-        </table>
-      </div>
-      <h3 class="subhead">包肖站点权重</h3>
-      <p class="hint">按各站「只荐一肖」的近期表现缩放。名单更长不加分，特码资料不进排名。</p>
-      <div id="weightList" class="weights"></div>
     </section>
 
     <section class="block">
@@ -91,12 +106,13 @@
             <tr>
               <th>策略</th>
               <th>特码</th>
-              <th>包肖</th>
+              <th>单肖</th>
             </tr>
           </thead>
           <tbody id="backtestBody"></tbody>
         </table>
       </div>
+      <p id="backtestLian" class="meta"></p>
       <p id="backtestNote" class="hint"></p>
     </section>
 
@@ -113,13 +129,15 @@
               <th>特码生肖</th>
             </tr>
           </thead>
-          <tbody id="drawsBody"></tbody>
+          <tbody id="drawsBody" class="collapsed"></tbody>
         </table>
       </div>
+      <button class="ghost more" type="button" data-toggle="drawsBody" hidden>展开全部</button>
     </section>
 
     <footer class="foot">
-      <strong>包肖</strong>：6个平码+1个特码里，任意一个号码是该生肖即算命中。<br />
+      <strong>单肖</strong>：6个平码+1个特码里，任意一个号码是该生肖即算命中。<br />
+      <strong>三连肖 / 五连肖</strong>：选中的 3 / 5 个生肖都要在这7个号码里出现，少一个就不中。<br />
       <strong>特码生肖</strong>：只有特码对应生肖才算命中。开奖近似随机，仅供娱乐参考。
     </footer>
   </div>
@@ -133,6 +151,6 @@
       </div>
     </div>
   </div>
-  <script src="/static/app.js?v=8"></script>
+  <script src="/static/app.js?v=12"></script>
 </body>
 </html>

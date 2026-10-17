@@ -265,20 +265,35 @@ def latest_backtest_snapshot() -> dict[str, Any] | None:
 
 
 def upsert_recommend(
-    period: int, play_type: str, zodiac: str, score: float, detail: dict[str, Any]
+    period: int,
+    play_type: str,
+    zodiac: str,
+    score: float,
+    detail: dict[str, Any],
+    zodiacs: list[str] | None = None,
 ) -> None:
+    """写入或覆盖一期一个玩法的推荐。不碰 hit，已对账的结果由调用方先判断锁定。"""
     with db_cursor() as cur:
         cur.execute(
             """
-            INSERT INTO recommend_log (period, play_type, zodiac, score, score_detail)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO recommend_log
+              (period, play_type, zodiac, zodiacs, score, score_detail)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
               zodiac=VALUES(zodiac),
+              zodiacs=VALUES(zodiacs),
               score=VALUES(score),
               score_detail=VALUES(score_detail),
               created_at=CURRENT_TIMESTAMP
             """,
-            (period, play_type, zodiac, score, json.dumps(detail, ensure_ascii=False)),
+            (
+                period,
+                play_type,
+                zodiac,
+                json.dumps(zodiacs, ensure_ascii=False) if zodiacs else None,
+                score,
+                json.dumps(detail, ensure_ascii=False),
+            ),
         )
 
 
@@ -293,6 +308,8 @@ def _parse_recommend_row(row: dict[str, Any] | None) -> dict[str, Any] | None:
             row["score_detail"] = json.loads(detail)
         except json.JSONDecodeError:
             row["score_detail"] = {}
+    if "zodiacs" in row:
+        row["zodiacs"] = _load_zodiacs(row.get("zodiacs")) or None
     return row
 
 
@@ -300,7 +317,7 @@ def get_recommends_for_period(period: int) -> list[dict[str, Any]]:
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT period, play_type, zodiac, score, score_detail, hit, created_at
+            SELECT period, play_type, zodiac, zodiacs, score, score_detail, hit, created_at
             FROM recommend_log
             WHERE period=%s
             """,
@@ -444,20 +461,26 @@ def site_hit_stats(
     }
 
 
-def list_recent_recommend_hits(limit: int = 20) -> list[dict[str, Any]]:
+def list_recent_recommend_hits(periods: int = 20) -> list[dict[str, Any]]:
+    """最近 periods 期的全部玩法推荐。按期数截取，玩法多了也不会少显示几期。"""
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT r.period, r.play_type, r.zodiac, r.hit, r.score,
-                   d.special_zodiac, d.special
+            SELECT r.period, r.play_type, r.zodiac, r.zodiacs,
+                   r.hit, r.score, d.special_zodiac, d.special
             FROM recommend_log r
+            INNER JOIN (
+              SELECT DISTINCT period FROM recommend_log ORDER BY period DESC LIMIT %s
+            ) recent ON recent.period = r.period
             LEFT JOIN draw_result d ON d.period = r.period
             ORDER BY r.period DESC, r.play_type
-            LIMIT %s
             """,
-            (limit,),
+            (periods,),
         )
-        return list(cur.fetchall())
+        rows = list(cur.fetchall())
+    for row in rows:
+        row["zodiacs"] = _load_zodiacs(row.get("zodiacs")) or None
+    return rows
 
 
 def latest_recommend_period() -> int | None:

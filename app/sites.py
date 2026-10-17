@@ -133,13 +133,6 @@ def enabled_tip_sites() -> list[TipSite]:
     return [s for s in TIP_SITES if s.enabled]
 
 
-def tip_site_by_code(code: str) -> TipSite | None:
-    for s in TIP_SITES:
-        if s.code == code:
-            return s
-    return None
-
-
 def all_tip_fetch_urls(site: TipSite) -> list[str]:
     """先 tip 直链，再入口；去重保序。"""
     seen: set[str] = set()

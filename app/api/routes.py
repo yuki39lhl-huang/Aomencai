@@ -58,19 +58,6 @@ def latest_recommend_api():
     }
 
 
-@router.get("/hit-stats")
-def hit_stats_api():
-    draw = latest_draw()
-    period = int(draw["period"]) + 1 if draw else 1
-    return {
-        "hits": hit_summary(limit=24),
-        "site_weights": {
-            "bao_xiao": site_weights_for_period("bao_xiao", period),
-            "te_ma": site_weights_for_period("te_ma", period),
-        },
-    }
-
-
 class ManualHitBody(BaseModel):
     period: int
     bao_xiao: bool

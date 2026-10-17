@@ -3,6 +3,8 @@
 USE aomencai;
 
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS backtest_snapshot;
+DROP TABLE IF EXISTS site_tip_hit;
 DROP TABLE IF EXISTS recommend_log;
 DROP TABLE IF EXISTS site_tip;
 DROP TABLE IF EXISTS scrape_run;

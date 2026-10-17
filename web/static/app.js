@@ -44,6 +44,35 @@ function asDetail(row) {
   return detail;
 }
 
+function groupZodiacs(row) {
+  if (!row) return [];
+  if (Array.isArray(row.zodiacs) && row.zodiacs.length) return row.zodiacs;
+  return (asDetail(row).places || []).map((p) => p.zodiac);
+}
+
+function fillGroup(prefix, row) {
+  const groupEl = document.getElementById("group" + prefix);
+  const metaEl = document.getElementById("meta" + prefix);
+  const places = row ? asDetail(row).places || [] : [];
+  if (!row || !places.length) {
+    groupEl.innerHTML = '<p class="place-zodiac">—</p>';
+    metaEl.textContent = row ? "" : "下次刷新分析后生成";
+    return;
+  }
+  const brief = prefix === "Lian5";
+  groupEl.innerHTML = places
+    .map(
+      (place) => `<div class="place">
+        <p class="place-label">${escapeHTML(place.place)}</p>
+        <p class="place-zodiac">${escapeHTML(place.zodiac || "—")}</p>
+        <p class="place-meta">得分 ${escapeHTML(place.score)}</p>
+        ${brief ? "" : `<p class="place-meta">遗漏 ${escapeHTML(place.omit)} · 热度 ${escapeHTML(place.hot)}</p>`}
+      </div>`
+    )
+    .join("");
+  metaEl.textContent = `平均得分 ${row.score}`;
+}
+
 function fillPick(prefix, row) {
   const zodiacEl = document.getElementById("zodiac" + prefix);
   const metaEl = document.getElementById("meta" + prefix);
@@ -80,41 +109,56 @@ function renderHits(payload) {
   const weightEl = document.getElementById("weightList");
   const hits = payload.hits || {};
   const by = hits.by_play || {};
-  const bao = by.bao_xiao || {};
-  const tema = by.te_ma || {};
-  const pending = (bao.pending || 0) + (tema.pending || 0);
-  summaryEl.textContent =
-    `包肖 ${bao.hit || 0} 中 / ${bao.miss || 0} 没中 · 特码 ${tema.hit || 0} 中 / ${tema.miss || 0} 没中` +
-    (pending ? ` · 待开奖 ${pending}` : "");
+  const plays = [
+    ["bao_xiao", "单肖", "约 48%"],
+    ["lian3", "三连肖", "约 8%"],
+    ["lian5", "五连肖", "不到 1%"],
+    ["te_ma", "特码", "约 8%"],
+  ];
 
   const grouped = new Map();
   (hits.items || []).forEach((item) => {
     const row = grouped.get(item.period) || { period: item.period, special: item.special_zodiac || "—" };
-    if (item.play_type === "bao_xiao") {
-      row.bao = item.zodiac;
-      row.baoHit = item.hit;
-    } else if (item.play_type === "te_ma") {
-      row.tema = item.zodiac;
-      row.temaHit = item.hit;
-    }
+    row[item.play_type] = item;
     if (item.special_zodiac) row.special = item.special_zodiac;
     grouped.set(item.period, row);
   });
   const rows = Array.from(grouped.values());
+  summaryEl.innerHTML =
+    `<span class="stats-range">最近 ${rows.length} 期</span>` +
+    plays
+      .map(([key, label, chance]) => {
+        const s = by[key] || {};
+        const done = (s.hit || 0) + (s.miss || 0);
+        const rate = done ? `${Math.round(((s.hit || 0) / done) * 100)}%` : "—";
+        return `<span class="stat">
+          <b>${label}</b>
+          <span>${s.hit || 0} 中 / ${s.miss || 0} 没中</span>
+          <span class="stat-rate">${rate}<small> · 运气${chance}</small></span>
+        </span>`;
+      })
+      .join("");
+
+  const cell = (item, many) => {
+    if (!item) return '<span class="muted">—</span>';
+    const names = many ? (item.zodiacs || [item.zodiac]).join(" ") : item.zodiac;
+    return `${escapeHTML(names)} ${hitTag(item.hit)}`;
+  };
   body.innerHTML = rows.length
     ? rows
         .map(
           (row) => `<tr>
             <td>${row.period}</td>
-            <td>${escapeHTML(row.bao || "—")}</td>
-            <td>${hitTag(row.baoHit)}</td>
-            <td>${escapeHTML(row.tema || "—")}</td>
-            <td>${hitTag(row.temaHit)}</td>
+            <td>${cell(row.bao_xiao, false)}</td>
+            <td>${cell(row.lian3, true)}</td>
+            <td>${cell(row.lian5, true)}</td>
+            <td>${cell(row.te_ma, false)}</td>
             <td>${escapeHTML(row.special || "—")}</td>
           </tr>`
         )
         .join("")
     : '<tr><td colspan="6">还没有推荐记录</td></tr>';
+  syncToggle("hitBody");
 
   const weights = (payload.site_weights || {}).bao_xiao || {};
   const entries = Object.entries(weights).sort((a, b) => b[1] - a[1]);
@@ -184,7 +228,7 @@ function renderManual(payload) {
   };
   const state = settle.drawn ? "已开奖" : "待开奖";
   document.getElementById("manualMeta").textContent =
-    `${settle.period}期${state} · 包肖荐 ${bao ? bao.zodiac : "—"} · 特码荐 ${tema ? tema.zodiac : "—"}`;
+    `${settle.period}期${state} · 单肖荐 ${bao ? bao.zodiac : "—"} · 特码荐 ${tema ? tema.zodiac : "—"}`;
   setHitRadios("baoHit", bao ? bao.hit : null);
   setHitRadios("temaHit", tema ? tema.hit : null);
 }
@@ -195,15 +239,78 @@ function selectedHit(name) {
   return el.value === "1";
 }
 
+const COLLAPSED_ROWS = 10;
+
+function syncToggle(bodyId) {
+  const body = document.getElementById(bodyId);
+  const btn = document.querySelector(`[data-toggle="${bodyId}"]`);
+  if (!body || !btn) return;
+  const total = body.querySelectorAll("tr").length;
+  btn.hidden = total <= COLLAPSED_ROWS;
+  btn.textContent = body.classList.contains("collapsed") ? `展开全部 ${total} 期` : "收起";
+}
+
+document.querySelectorAll("[data-toggle]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const id = btn.dataset.toggle;
+    document.getElementById(id).classList.toggle("collapsed");
+    syncToggle(id);
+  });
+});
+
+function clockText(value) {
+  const d = value ? new Date(value) : null;
+  if (!d || Number.isNaN(d.getTime())) return null;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function todayAt(hour, minute) {
+  const d = new Date();
+  d.setHours(hour, minute, 0, 0);
+  return d;
+}
+
+function renderRefreshTip(rec, draw) {
+  const el = document.getElementById("refreshTip");
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const created = rec && rec.bao_xiao ? new Date(rec.bao_xiao.created_at) : null;
+  let text;
+  let tone = "";
+  if (draw && String(draw.draw_date).slice(0, 10) === today) {
+    text = "今晚已开奖。下一期请在明天 21:00–21:20 刷新定推荐。";
+  } else if (now < todayAt(21, 0)) {
+    text = "今晚 21:32 开奖。网站资料多在开奖前一小时内更新，建议 21:00–21:20 再刷新一次。";
+  } else if (now < todayAt(21, 32)) {
+    if (created && created >= todayAt(21, 0)) {
+      text = "本期已在开奖前刷新过，按这组推荐即可。";
+      tone = "ok";
+    } else {
+      text = "现在是建议刷新时段，点「刷新分析」更新本期推荐。";
+      tone = "warn";
+    }
+  } else {
+    text = "已过 21:32，开奖后点「刷新分析」对账。";
+    tone = "warn";
+  }
+  el.textContent = text;
+  el.className = "refresh-tip" + (tone ? ` ${tone}` : "");
+}
+
 function renderRecommend(payload) {
   const rec = payload.recommend;
   const draw = payload.latest_draw;
   const metaEl = document.getElementById("periodMeta");
+  renderRefreshTip(rec, draw);
 
   if (!rec) {
     metaEl.textContent = "尚未分析，请点击「刷新分析」";
     fillPick("Bao", null);
     fillPick("Tema", null);
+    fillGroup("Lian3", null);
+    fillGroup("Lian5", null);
     renderHits(payload);
     renderBacktest(payload.backtest);
     renderManual(payload);
@@ -213,10 +320,13 @@ function renderRecommend(payload) {
   const drawText = draw
     ? `最新开奖 ${draw.period}期 特码 ${String(draw.special).padStart(2, "0")}/${draw.special_zodiac}`
     : "暂无开奖";
-  metaEl.textContent = `预测 ${rec.period} 期 · ${drawText}`;
+  const made = clockText(rec.bao_xiao && rec.bao_xiao.created_at);
+  metaEl.textContent = `预测 ${rec.period} 期 · ${drawText}` + (made ? ` · 推荐生成于 ${made}` : "");
 
   fillPick("Bao", rec.bao_xiao);
   fillPick("Tema", rec.te_ma);
+  fillGroup("Lian3", rec.lian3);
+  fillGroup("Lian5", rec.lian5);
   renderHits(payload);
   renderBacktest(payload.backtest);
   renderManual(payload);
@@ -241,7 +351,7 @@ function renderBacktest(snapshot) {
   meta.textContent =
     `${snapshot.from_period}–${snapshot.through_period} 期，共 ${snapshot.n} 期` +
     (snapshot.saved_at ? ` · ${snapshot.saved_at} 更新` : "") +
-    ` · 随机基准 特码 8.3% / 包肖 ${baoBase}%`;
+    ` · 随机基准 特码 8.3% / 单肖 ${baoBase}%`;
   body.innerHTML = (snapshot.rows || [])
     .map(
       (row) => `<tr>
@@ -251,6 +361,12 @@ function renderBacktest(snapshot) {
       </tr>`
     )
     .join("");
+  const lianEl = document.getElementById("backtestLian");
+  const lian = snapshot.lian || [];
+  lianEl.textContent = lian.length
+    ? "现行公式连肖（整组全出才算）：" +
+      lian.map((item) => `${item.label} ${pct(item.hits, item.n)}，靠运气预计 ${item.expected} 次`).join(" · ")
+    : "";
   const tips = snapshot.tema_tips || {};
   note.textContent = tips.note || "";
 }
@@ -272,6 +388,7 @@ function renderDraws(items) {
       </tr>`;
     })
     .join("");
+  syncToggle("drawsBody");
 }
 
 async function loadPanel() {
@@ -289,11 +406,13 @@ async function doRefresh() {
     const result = await fetchJSON("/api/refresh?full_history=true", { method: "POST" });
     const bao = result.recommend.bao_xiao.zodiac;
     const tema = result.recommend.te_ma.zodiac;
+    const lian3 = groupZodiacs(result.recommend.lian3).join("");
     const notes = [];
     if (result.live_error) notes.push("实时开奖暂时无效，已用库里的开奖继续");
     if (result.history_error || result.history_light_error) notes.push("历史页暂时连不上");
     const extra = notes.length ? `（${notes.join("；")}）` : "";
-    setStatus(`完成：${result.recommend.period}期 包肖「${bao}」/ 特码「${tema}」${extra}`);
+    const lianText = lian3 ? ` / 三连肖「${lian3}」` : "";
+    setStatus(`完成：${result.recommend.period}期 单肖「${bao}」${lianText} / 特码「${tema}」${extra}`);
     await loadPanel();
   } catch (err) {
     setStatus(String(err.message || err), true);
@@ -311,7 +430,7 @@ document.getElementById("btnManualHit").addEventListener("click", async () => {
     return;
   }
   if (bao === null || tema === null) {
-    setStatus("请先选择包肖和特码是中还是没中", true);
+    setStatus("请先选择单肖和特码是中还是没中", true);
     return;
   }
   const recorded =
@@ -320,7 +439,7 @@ document.getElementById("btnManualHit").addEventListener("click", async () => {
   if (recorded) {
     const replace = await askNotice({
       title: "本期已经录入过",
-      text: `${settlePeriod}期已有记录：包肖${hitWord(settleRecorded.bao)}，特码${hitWord(settleRecorded.tema)}。\n是否用这次的结果替换？替换后只保留最新一次。`,
+      text: `${settlePeriod}期已有记录：单肖${hitWord(settleRecorded.bao)}，特码${hitWord(settleRecorded.tema)}。\n是否用这次的结果替换？替换后只保留最新一次。`,
       okText: "替换",
       cancelText: "取消",
     });
@@ -336,7 +455,7 @@ document.getElementById("btnManualHit").addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ period: settlePeriod, bao_xiao: bao, te_ma: tema }),
     });
-    const summary = `${settlePeriod}期：包肖${bao ? "中" : "没中"}，特码${tema ? "中" : "没中"}`;
+    const summary = `${settlePeriod}期：单肖${bao ? "中" : "没中"}，特码${tema ? "中" : "没中"}`;
     setStatus(recorded ? `已替换 ${summary}` : `写入成功 ${summary}`);
     await loadPanel();
     await askNotice({

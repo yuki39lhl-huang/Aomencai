@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from app.config import settings
-from app.repositories import get_recommends_for_period, list_draws_asc, list_tips, upsert_recommend
+from app.repositories import (
+    get_recommends_for_period,
+    list_draws_asc,
+    list_tips,
+    upsert_recommend,
+)
 from app.scrapers.tips import contributing_tips, tip_scores_for_period
 from app.services.zodiac import ZODIAC_ORDER, bao_xiao_hit
 
@@ -148,10 +153,22 @@ def _score_one(
             "total": round(total, 4),
         }
 
-    winner = max(
+    ranked = sorted(
         ZODIAC_ORDER,
         key=lambda z: (totals[z], -abs(omit[z] - omit_center), -ZODIAC_ORDER.index(z)),
+        reverse=True,
     )
+    winner = ranked[0]
+    place_rows = [
+        {
+            "place": label,
+            "zodiac": z,
+            "score": round(totals[z], 4),
+            "omit": omit[z],
+            "hot": hot[z],
+        }
+        for label, z in zip(_PLACE_LABELS, ranked)
+    ]
 
     existing = next(
         (
@@ -214,7 +231,52 @@ def _score_one(
         "zodiac": winner,
         "score": round(totals[winner], 4),
         "score_detail": store_detail,
+        "ranking": place_rows,
     }
+
+
+_PLACE_LABELS = ("冠军", "亚军", "季军", "第四", "第五")
+_LIAN = (("lian3", 3, "三连肖"), ("lian5", 5, "五连肖"))
+
+
+def _score_lian(
+    *,
+    target_period: int,
+    bao: dict[str, Any],
+    existing: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """连肖直接取包肖排名的前 3 / 前 5 名。已有中没中的整组锁定；单肖已锁定时不补写。"""
+    out: dict[str, Any] = {}
+    ranking = bao.get("ranking") or []
+    for play, size, label in _LIAN:
+        row = existing.get(play)
+        if row and (row.get("hit") is not None or bao.get("locked")):
+            out[play] = {**row, "mode_label": label, "locked": row.get("hit") is not None}
+            continue
+        if bao.get("locked") or len(ranking) < size:
+            out[play] = None
+            continue
+        group = ranking[:size]
+        zodiacs = [p["zodiac"] for p in group]
+        score = round(sum(p["score"] for p in group) / size, 4)
+        detail = {
+            "mode": play,
+            "mode_label": label,
+            "hit_rule": f"{size}个生肖都出现在7个号码里才算中",
+            "places": group,
+            "based_on_latest_draw": (bao.get("score_detail") or {}).get("based_on_latest_draw"),
+        }
+        upsert_recommend(target_period, play, zodiacs[0], score, detail, zodiacs=zodiacs)
+        out[play] = {
+            "period": target_period,
+            "play_type": play,
+            "mode_label": label,
+            "zodiac": zodiacs[0],
+            "zodiacs": zodiacs,
+            "score": score,
+            "score_detail": detail,
+        }
+    return out
 
 
 def _reasons(
@@ -292,10 +354,14 @@ def score_for_period(target_period: int) -> dict[str, Any]:
         tip_raw=tip_raw_tema,
         tip_count=tema_tip_count,
     )
+    existing = {r["play_type"]: r for r in get_recommends_for_period(target_period)}
+    lian = _score_lian(target_period=target_period, bao=bao, existing=existing)
     return {
         "period": target_period,
         "based_on_latest_draw": latest,
         "bao_xiao": bao,
+        "lian3": lian["lian3"],
+        "lian5": lian["lian5"],
         "te_ma": tema,
         "site_weights": {"bao_xiao": bao_site_w},
     }
@@ -319,5 +385,7 @@ def latest_recommendation() -> dict[str, Any] | None:
     return {
         "period": period,
         "bao_xiao": by_type.get("bao_xiao"),
+        "lian3": by_type.get("lian3"),
+        "lian5": by_type.get("lian5"),
         "te_ma": by_type.get("te_ma"),
     }

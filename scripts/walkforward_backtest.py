@@ -27,6 +27,11 @@ def main() -> None:
             f"{row['label']} | 特码 {_rate(int(row['tema_hits']), n)}（基准 8.3%）"
             f" | 包肖 {_rate(int(row['bao_hits']), n)}（基准 {bao_base:.1%}）"
         )
+    for item in snapshot.get("lian") or []:
+        print(
+            f"现行公式{item['label']} | 全出 {_rate(int(item['hits']), int(item['n']))}"
+            f"（靠运气预计 {item['expected']} 次）"
+        )
     tips = snapshot["tema_tips"]
     print()
     print(f"特码资料（一肖到三肖，有名单的记录 {tips['records']} 条）")

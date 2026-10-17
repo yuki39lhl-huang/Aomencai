@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime, time
+from itertools import combinations
 from typing import Any
 
 from app.config import settings
@@ -48,6 +49,21 @@ def bao_cover_rate(zodiacs: list[str]) -> float:
     return 1.0 - _comb(outside, 7) / total
 
 
+def all_present_rate(zodiacs: list[str]) -> float:
+    """这几个生肖全部出现在 7 个号码里的概率（容斥）。"""
+    total = _comb(49, 7)
+    if total <= 0:
+        return 0.0
+    acc = 0.0
+    for r in range(len(zodiacs) + 1):
+        for sub in combinations(zodiacs, r):
+            covered: set[int] = set()
+            for zodiac in sub:
+                covered.update(zodiac_numbers(zodiac, settings.lunar_year))
+            acc += (-1) ** r * _comb(49 - len(covered), 7) / total
+    return acc
+
+
 def _pick_coldest(omit: dict[str, int]) -> str:
     return max(ZODIAC_ORDER, key=lambda z: (omit[z], -ZODIAC_ORDER.index(z)))
 
@@ -70,6 +86,16 @@ def _current_winner(
     hot: dict[str, int],
     tip_raw: dict[str, float],
 ) -> str:
+    return _current_ranked(play=play, omit=omit, hot=hot, tip_raw=tip_raw)[0]
+
+
+def _current_ranked(
+    *,
+    play: str,
+    omit: dict[str, int],
+    hot: dict[str, int],
+    tip_raw: dict[str, float],
+) -> list[str]:
     if play == "bao_xiao":
         center = settings.bao_omit_center
         half = settings.bao_omit_half
@@ -91,9 +117,10 @@ def _current_winner(
         )
         for z in ZODIAC_ORDER
     }
-    return max(
+    return sorted(
         ZODIAC_ORDER,
         key=lambda z: (totals[z], -abs(omit[z] - center), -ZODIAC_ORDER.index(z)),
+        reverse=True,
     )
 
 
@@ -129,6 +156,7 @@ def run_walkforward() -> dict[str, Any] | None:
     bao_used = 0
     bao_skipped = 0
     tema_skipped = 0
+    lian = {size: {"hits": 0, "expected": 0.0} for size in (3, 5)}
 
     for i in range(_START, len(draws)):
         history = draws[:i]
@@ -153,6 +181,7 @@ def run_walkforward() -> dict[str, Any] | None:
         else:
             tip_raw = {z: 0.0 for z in ZODIAC_ORDER}
 
+        bao_ranked = _current_ranked(play="bao_xiao", omit=omit_b, hot=hot_b, tip_raw=tip_raw)
         picks = {
             "cold": (_pick_coldest(omit_t), _pick_coldest(omit_b)),
             "gap": (
@@ -162,9 +191,13 @@ def run_walkforward() -> dict[str, Any] | None:
             "hot": (_pick_hot(hot_t), _pick_hot(hot_b)),
             "current": (
                 _current_winner(play="te_ma", omit=omit_t, hot=hot_t, tip_raw=tip_raw),
-                _current_winner(play="bao_xiao", omit=omit_b, hot=hot_b, tip_raw=tip_raw),
+                bao_ranked[0],
             ),
         }
+        for size, bucket in lian.items():
+            group = bao_ranked[:size]
+            bucket["hits"] += int(all(bao_xiao_hit(z, row) for z in group))
+            bucket["expected"] += all_present_rate(group)
         for name, (tema_z, bao_z) in picks.items():
             stats[name]["n"] += 1
             stats[name]["tema"] += int(tema_z == special)
@@ -223,6 +256,16 @@ def run_walkforward() -> dict[str, Any] | None:
             }
             for key, label in labels
         ],
+        "lian": [
+            {
+                "key": f"lian{size}",
+                "label": "三连肖" if size == 3 else "五连肖",
+                "hits": lian[size]["hits"],
+                "expected": round(lian[size]["expected"], 1),
+                "n": n,
+            }
+            for size in (3, 5)
+        ],
         "tema_tips": {
             "records": tema_tip_n,
             "hits": tema_tip_hit,
@@ -242,7 +285,8 @@ def refresh_backtest_if_needed(latest_drawn_period: int) -> dict[str, Any]:
     current = latest_backtest_snapshot()
     same_period = current and int(current.get("through_period") or 0) >= latest_drawn_period
     same_rule = bool(current) and current.get("rule") == _RULE
-    if same_period and same_rule:
+    has_lian = bool(current) and "lian" in current
+    if same_period and same_rule and has_lian:
         return {"updated": False, "snapshot": current}
     snapshot = run_walkforward()
     if not snapshot:

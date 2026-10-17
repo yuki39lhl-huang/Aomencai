@@ -25,10 +25,14 @@ from app.services.scoring import (
     _scaled_component,
 )
 from app.services.zodiac import ZODIAC_ORDER, bao_xiao_hit, lunar_year_for, zodiac_numbers
+from app.sites import enabled_tip_sites
 
 _START = 40
 _DRAW_CLOCK = time(21, 32)
-_RULE = "pre_draw_21_32"
+_RULE = "pre_draw_21_32_consensus"
+# 共识实验：热度权重两档；资料只认至少这么多个启用站同推的肖
+_CONSENSUS_HOT_WEIGHTS = {"consensus_h0": 0.0, "consensus_h05": 0.05}
+_CONSENSUS_MIN_SITES = 2
 
 
 def _comb(n: int, k: int) -> int:
@@ -124,6 +128,45 @@ def _current_ranked(
     )
 
 
+def _consensus_sites(bao_tips: list[dict[str, Any]], enabled: set[str]) -> dict[str, int]:
+    """每个肖被几个启用站的包肖名单提到（同站只算一次）。"""
+    sites: dict[str, set[str]] = {z: set() for z in ZODIAC_ORDER}
+    for tip in bao_tips:
+        site = str(tip.get("site_code") or "")
+        if site not in enabled:
+            continue
+        for zodiac in tip.get("zodiacs") or []:
+            if zodiac in sites:
+                sites[zodiac].add(site)
+    return {z: len(s) for z, s in sites.items()}
+
+
+def _consensus_ranked(
+    *,
+    omit: dict[str, int],
+    hot: dict[str, int],
+    site_counts: dict[str, int],
+    hot_weight: float,
+) -> list[str]:
+    """遗漏照旧；热度按 hot_weight；资料分只给至少两站同推的肖，按同推站数归一。"""
+    center = settings.bao_omit_center
+    omit_n = _gap_component(omit, center=center, half_width=settings.bao_omit_half)
+    hot_n = _scaled_component(hot, min_lead=settings.score_min_lead, full_at=settings.hot_window)
+    agreed = {
+        z: float(c) if c >= _CONSENSUS_MIN_SITES else 0.0 for z, c in site_counts.items()
+    }
+    tip_n = _normalize(agreed)
+    totals = {
+        z: settings.weight_omit * omit_n[z] + hot_weight * hot_n[z] + settings.weight_tip * tip_n[z]
+        for z in ZODIAC_ORDER
+    }
+    return sorted(
+        ZODIAC_ORDER,
+        key=lambda z: (totals[z], -abs(omit[z] - center), -ZODIAC_ORDER.index(z)),
+        reverse=True,
+    )
+
+
 def _known_before_draw(tip: dict[str, Any], draw: dict[str, Any]) -> bool:
     """只有第一次抓到的时间早于该期开奖 21:32，才算预测时已经看得到。"""
     draw_day = draw.get("draw_date")
@@ -144,7 +187,16 @@ def run_walkforward() -> dict[str, Any] | None:
 
     stats = {
         name: {"tema": 0, "bao": 0, "n": 0}
-        for name in ("cold", "gap", "hot", "current")
+        for name in ("cold", "gap", "hot", "current", *_CONSENSUS_HOT_WEIGHTS)
+    }
+    enabled = {site.code for site in enabled_tip_sites()}
+    consensus = {
+        "periods_with_tips": 0,
+        "periods_agreed": 0,
+        "variants": {
+            key: {"changed": 0, "changed_hits": 0, "changed_hits_without_tip": 0}
+            for key in _CONSENSUS_HOT_WEIGHTS
+        },
     }
     this_year = lunar_year_for(None)
     single_bao = sum(bao_cover_rate([z], this_year) for z in ZODIAC_ORDER) / len(ZODIAC_ORDER)
@@ -195,13 +247,34 @@ def run_walkforward() -> dict[str, Any] | None:
                 bao_ranked[0],
             ),
         }
+        site_counts = _consensus_sites(bao_tips, enabled)
+        no_sites = {z: 0 for z in ZODIAC_ORDER}
+        if any(site_counts.values()):
+            consensus["periods_with_tips"] += 1
+        if max(site_counts.values()) >= _CONSENSUS_MIN_SITES:
+            consensus["periods_agreed"] += 1
+        for key, hot_weight in _CONSENSUS_HOT_WEIGHTS.items():
+            pick = _consensus_ranked(
+                omit=omit_b, hot=hot_b, site_counts=site_counts, hot_weight=hot_weight
+            )[0]
+            plain = _consensus_ranked(
+                omit=omit_b, hot=hot_b, site_counts=no_sites, hot_weight=hot_weight
+            )[0]
+            picks[key] = (None, pick)
+            if pick != plain:
+                variant = consensus["variants"][key]
+                variant["changed"] += 1
+                variant["changed_hits"] += int(bao_xiao_hit(pick, row))
+                variant["changed_hits_without_tip"] += int(bao_xiao_hit(plain, row))
+
         for size, bucket in lian.items():
             group = bao_ranked[:size]
             bucket["hits"] += int(all(bao_xiao_hit(z, row) for z in group))
             bucket["expected"] += all_present_rate(group, lunar_year_for(row.get("draw_date")))
         for name, (tema_z, bao_z) in picks.items():
             stats[name]["n"] += 1
-            stats[name]["tema"] += int(tema_z == special)
+            if tema_z is not None:
+                stats[name]["tema"] += int(tema_z == special)
             stats[name]["bao"] += int(bao_xiao_hit(bao_z, row))
 
         for tip in contributing_tips(tips, "te_ma"):
@@ -223,7 +296,10 @@ def run_walkforward() -> dict[str, Any] | None:
         ("gap", "靠近典型间隔"),
         ("hot", "只看热度"),
         ("current", "现行公式"),
+        ("consensus_h0", "共识（热度 0）"),
+        ("consensus_h05", "共识（热度 0.05）"),
     )
+    tema_keys = {"cold", "gap", "hot", "current"}
     if tema_tip_n and tema_tip_hit <= tema_tip_base * 1.15:
         tip_note = "特码资料没有明显高于名单长度 / 12，权重保持 0。"
         keep_zero = True
@@ -251,12 +327,21 @@ def run_walkforward() -> dict[str, Any] | None:
             {
                 "key": key,
                 "label": label,
-                "tema_hits": stats[key]["tema"],
+                "tema_hits": stats[key]["tema"] if key in tema_keys else None,
                 "bao_hits": stats[key]["bao"],
                 "n": stats[key]["n"],
             }
             for key, label in labels
         ],
+        "consensus": {
+            "min_sites": _CONSENSUS_MIN_SITES,
+            "periods_with_tips": consensus["periods_with_tips"],
+            "periods_agreed": consensus["periods_agreed"],
+            "variants": [
+                {"key": key, "hot_weight": weight, **consensus["variants"][key]}
+                for key, weight in _CONSENSUS_HOT_WEIGHTS.items()
+            ],
+        },
         "lian": [
             {
                 "key": f"lian{size}",
@@ -286,8 +371,8 @@ def refresh_backtest_if_needed(latest_drawn_period: int) -> dict[str, Any]:
     current = latest_backtest_snapshot()
     same_period = current and int(current.get("through_period") or 0) >= latest_drawn_period
     same_rule = bool(current) and current.get("rule") == _RULE
-    has_lian = bool(current) and "lian" in current
-    if same_period and same_rule and has_lian:
+    complete = bool(current) and "lian" in current and "consensus" in current
+    if same_period and same_rule and complete:
         return {"updated": False, "snapshot": current}
     snapshot = run_walkforward()
     if not snapshot:

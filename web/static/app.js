@@ -333,7 +333,7 @@ function renderRecommend(payload) {
 }
 
 function pct(hits, total) {
-  if (!total) return "—";
+  if (hits == null || !total) return "—";
   return `${hits}/${total} = ${(hits / total * 100).toFixed(1)}%`;
 }
 
@@ -368,7 +368,19 @@ function renderBacktest(snapshot) {
       lian.map((item) => `${item.label} ${pct(item.hits, item.n)}，靠运气预计 ${item.expected} 次`).join(" · ")
     : "";
   const tips = snapshot.tema_tips || {};
-  note.textContent = tips.note || "";
+  const cons = snapshot.consensus;
+  const consText = cons
+    ? ` 共识行只算包肖：资料只认至少 ${cons.min_sites} 个启用站同推的肖，有名单 ${cons.periods_with_tips} 期，` +
+      `有同推 ${cons.periods_agreed} 期；` +
+      cons.variants
+        .map(
+          (v) =>
+            `热度 ${v.hot_weight} 时资料改动推荐 ${v.changed} 期（共识中 ${v.changed_hits}，不加资料中 ${v.changed_hits_without_tip}）`
+        )
+        .join("，") +
+      "。"
+    : "";
+  note.textContent = (tips.note || "") + consText;
 }
 
 function renderDraws(items) {

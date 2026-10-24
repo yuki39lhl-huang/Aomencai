@@ -337,13 +337,27 @@ function pct(hits, total) {
   return `${hits}/${total} = ${(hits / total * 100).toFixed(1)}%`;
 }
 
+function expText(expected, total) {
+  if (expected == null || !total) return "—";
+  const n = Number(expected);
+  return `${n.toFixed(1)} 次 (${(n / total * 100).toFixed(1)}%)`;
+}
+
 function renderBacktest(snapshot) {
   const meta = document.getElementById("backtestMeta");
   const body = document.getElementById("backtestBody");
   const note = document.getElementById("backtestNote");
+  const lianEl = document.getElementById("backtestLian");
+  const lianBody = document.getElementById("backtestLianBody");
+  const yearMeta = document.getElementById("backtestYearMeta");
+  const yearBody = document.getElementById("backtestYearBody");
   if (!snapshot) {
     meta.textContent = "还没有对照。新开奖写入后，点一次「刷新分析」就会算出。";
     body.innerHTML = "";
+    lianEl.textContent = "";
+    lianBody.innerHTML = "";
+    yearMeta.textContent = "";
+    yearBody.innerHTML = "";
     note.textContent = "";
     return;
   }
@@ -351,22 +365,48 @@ function renderBacktest(snapshot) {
   meta.textContent =
     `${snapshot.from_period}–${snapshot.through_period} 期，共 ${snapshot.n} 期` +
     (snapshot.saved_at ? ` · ${snapshot.saved_at} 更新` : "") +
-    ` · 随机基准 特码 8.3% / 单肖 ${baoBase}%`;
+    ` · 随机基准 特码 8.3% / 单肖 ${baoBase}%。号码先验按所挑生肖占几个号计算。`;
   body.innerHTML = (snapshot.rows || [])
     .map(
       (row) => `<tr>
         <td>${escapeHTML(row.label)}</td>
         <td>${pct(row.tema_hits, row.n)}</td>
         <td>${pct(row.bao_hits, row.n)}</td>
+        <td>${expText(row.bao_expected, row.n)}</td>
       </tr>`
     )
     .join("");
-  const lianEl = document.getElementById("backtestLian");
   const lian = snapshot.lian || [];
   lianEl.textContent = lian.length
-    ? "现行公式连肖（整组全出才算）：" +
-      lian.map((item) => `${item.label} ${pct(item.hits, item.n)}，靠运气预计 ${item.expected} 次`).join(" · ")
+    ? "连肖要整组都出现才算中。锁当年肖把当年那只（5 个号）固定在组里，其余仍按现行排名取。"
     : "";
+  lianBody.innerHTML = lian
+    .map(
+      (item) => `<tr>
+        <td>${escapeHTML(item.label)}</td>
+        <td>${pct(item.hits, item.n)}</td>
+        <td>${expText(item.expected, item.n)}</td>
+      </tr>`
+    )
+    .join("");
+  const split = (snapshot.year_prior && snapshot.year_prior.by_year) || [];
+  yearMeta.textContent = split.length
+    ? "按开奖日的生肖年切开。任一年没有高于「永远当年肖」或「锁当年肖」，正式公式不动。"
+    : "";
+  yearBody.innerHTML = split
+    .map(
+      (item) => `<tr>
+        <td>${item.year} ${escapeHTML(item.zodiac || "")}</td>
+        <td>${item.n}</td>
+        <td>${item.current_bao}/${item.n}</td>
+        <td>${item.year_bao}/${item.n}</td>
+        <td>${item.current_lian3}/${item.n}</td>
+        <td>${item.year_lian3}/${item.n}</td>
+        <td>${item.current_lian5}/${item.n}</td>
+        <td>${item.year_lian5}/${item.n}</td>
+      </tr>`
+    )
+    .join("");
   const tips = snapshot.tema_tips || {};
   const cons = snapshot.consensus;
   const consText = cons
@@ -380,7 +420,8 @@ function renderBacktest(snapshot) {
         .join("，") +
       "。"
     : "";
-  note.textContent = (tips.note || "") + consText;
+  const yearNote = (snapshot.year_prior && snapshot.year_prior.note) || "";
+  note.textContent = `${yearNote}${yearNote ? " " : ""}${tips.note || ""}${consText}`;
 }
 
 function renderDraws(items) {

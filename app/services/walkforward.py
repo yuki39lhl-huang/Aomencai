@@ -24,12 +24,11 @@ from app.services.scoring import (
     _omit_tema,
     _scaled_component,
 )
-from app.services.zodiac import ZODIAC_ORDER, bao_xiao_hit, lunar_year_for, zodiac_numbers
+from app.services.zodiac import ZODIAC_ORDER, bao_xiao_hit, lunar_year_for, year_zodiac, zodiac_numbers
 from app.sites import enabled_tip_sites
 
 _START = 40
-_DRAW_CLOCK = time(21, 32)
-_RULE = "pre_draw_21_32_consensus"
+_RULE = "pre_draw_21_32_year_prior"
 # 共识实验：热度权重两档；资料只认至少这么多个启用站同推的肖
 _CONSENSUS_HOT_WEIGHTS = {"consensus_h0": 0.0, "consensus_h05": 0.05}
 _CONSENSUS_MIN_SITES = 2
@@ -167,6 +166,54 @@ def _consensus_ranked(
     )
 
 
+def _lock_year(ranked: list[str], anchor: str, size: int) -> list[str]:
+    """当年肖（5 个号）固定在组里，其余名额按现行排名往下取。"""
+    others = [zodiac for zodiac in ranked if zodiac != anchor]
+    return [anchor, *others[: size - 1]]
+
+
+def _all_hit(group: list[str], row: dict[str, Any]) -> int:
+    return int(all(bao_xiao_hit(zodiac, row) for zodiac in group))
+
+
+def _year_prior_note(by_year: list[dict[str, Any]], override: dict[str, dict[str, int]]) -> str:
+    """对照结论只写句子，不改推荐。任一生肖年没有高于当年肖基准，正式公式就不动。"""
+    parts = [
+        "号码先验按生肖占几个号计算（当年肖 5 个，其余各 4 个），不是 12 肖均匀。",
+        "永远当年肖、锁当年肖只进对照，不写推荐。",
+    ]
+    single = override["single"]
+    parts.append(
+        f"单肖现行公式改选非当年肖 {single['changed']} 期，"
+        f"这些期现行中 {single['current_hits']}、当年肖中 {single['year_hits']}。"
+    )
+    for key, label in (("lian3", "三连肖"), ("lian5", "五连肖")):
+        item = override[key]
+        parts.append(
+            f"{label}组不同的 {item['changed']} 期，"
+            f"现行全中 {item['current_hits']}、锁当年肖全中 {item['year_hits']}。"
+        )
+    plays = (
+        ("current_bao", "year_bao", "单肖"),
+        ("current_lian3", "year_lian3", "三连肖"),
+        ("current_lian5", "year_lian5", "五连肖"),
+    )
+    failed: list[str] = []
+    for bucket in by_year:
+        for current_key, year_key, label in plays:
+            if bucket[current_key] <= bucket[year_key]:
+                failed.append(f"{bucket['year']}{bucket['zodiac']}年{label}")
+    if not by_year:
+        parts.append("没有可分年的期，正式公式不动。")
+    elif failed:
+        parts.append(
+            "按生肖年切开后，" + "、".join(failed) + "没有高于对应的当年肖基准，正式公式不动。"
+        )
+    else:
+        parts.append("每个生肖年的单肖、三连肖、五连肖都高于当年肖基准。仍不自动改线上。")
+    return "".join(parts)
+
+
 def _known_before_draw(tip: dict[str, Any], draw: dict[str, Any]) -> bool:
     """只有第一次抓到的时间早于该期开奖 21:32，才算预测时已经看得到。"""
     draw_day = draw.get("draw_date")
@@ -186,8 +233,8 @@ def run_walkforward() -> dict[str, Any] | None:
         return None
 
     stats = {
-        name: {"tema": 0, "bao": 0, "n": 0}
-        for name in ("cold", "gap", "hot", "current", *_CONSENSUS_HOT_WEIGHTS)
+        name: {"tema": 0, "bao": 0, "bao_expected": 0.0, "n": 0}
+        for name in ("cold", "gap", "hot", "current", "year", *_CONSENSUS_HOT_WEIGHTS)
     }
     enabled = {site.code for site in enabled_tip_sites()}
     consensus = {
@@ -209,7 +256,15 @@ def run_walkforward() -> dict[str, Any] | None:
     bao_used = 0
     bao_skipped = 0
     tema_skipped = 0
-    lian = {size: {"hits": 0, "expected": 0.0} for size in (3, 5)}
+    lian = {
+        kind: {size: {"hits": 0, "expected": 0.0} for size in (3, 5)}
+        for kind in ("current", "year")
+    }
+    by_year: dict[int, dict[str, Any]] = {}
+    override = {
+        key: {"changed": 0, "current_hits": 0, "year_hits": 0}
+        for key in ("single", "lian3", "lian5")
+    }
 
     for i in range(_START, len(draws)):
         history = draws[:i]
@@ -267,12 +322,51 @@ def run_walkforward() -> dict[str, Any] | None:
                 variant["changed_hits"] += int(bao_xiao_hit(pick, row))
                 variant["changed_hits_without_tip"] += int(bao_xiao_hit(plain, row))
 
-        for size, bucket in lian.items():
-            group = bao_ranked[:size]
-            bucket["hits"] += int(all(bao_xiao_hit(z, row) for z in group))
-            bucket["expected"] += all_present_rate(group, lunar_year_for(row.get("draw_date")))
+        draw_year = lunar_year_for(row.get("draw_date"))
+        anchor = year_zodiac(draw_year)
+        picks["year"] = (None, anchor)
+        if bao_ranked[0] != anchor:
+            override["single"]["changed"] += 1
+            override["single"]["current_hits"] += int(bao_xiao_hit(bao_ranked[0], row))
+            override["single"]["year_hits"] += int(bao_xiao_hit(anchor, row))
+        groups = {
+            3: (bao_ranked[:3], _lock_year(bao_ranked, anchor, 3)),
+            5: (bao_ranked[:5], _lock_year(bao_ranked, anchor, 5)),
+        }
+        year_row = by_year.get(draw_year)
+        if year_row is None:
+            year_row = {
+                "year": draw_year,
+                "zodiac": anchor,
+                "n": 0,
+                "current_bao": 0,
+                "year_bao": 0,
+                "current_lian3": 0,
+                "year_lian3": 0,
+                "current_lian5": 0,
+                "year_lian5": 0,
+            }
+            by_year[draw_year] = year_row
+        year_row["n"] += 1
+        year_row["current_bao"] += int(bao_xiao_hit(bao_ranked[0], row))
+        year_row["year_bao"] += int(bao_xiao_hit(anchor, row))
+        for size, (current_group, year_group) in groups.items():
+            play = f"lian{size}"
+            current_hit = _all_hit(current_group, row)
+            year_hit = _all_hit(year_group, row)
+            lian["current"][size]["hits"] += current_hit
+            lian["year"][size]["hits"] += year_hit
+            lian["current"][size]["expected"] += all_present_rate(current_group, draw_year)
+            lian["year"][size]["expected"] += all_present_rate(year_group, draw_year)
+            year_row[f"current_{play}"] += current_hit
+            year_row[f"year_{play}"] += year_hit
+            if set(current_group) != set(year_group):
+                override[play]["changed"] += 1
+                override[play]["current_hits"] += current_hit
+                override[play]["year_hits"] += year_hit
         for name, (tema_z, bao_z) in picks.items():
             stats[name]["n"] += 1
+            stats[name]["bao_expected"] += bao_cover_rate([bao_z], draw_year)
             if tema_z is not None:
                 stats[name]["tema"] += int(tema_z == special)
             stats[name]["bao"] += int(bao_xiao_hit(bao_z, row))
@@ -296,6 +390,7 @@ def run_walkforward() -> dict[str, Any] | None:
         ("gap", "靠近典型间隔"),
         ("hot", "只看热度"),
         ("current", "现行公式"),
+        ("year", "永远当年肖"),
         ("consensus_h0", "共识（热度 0）"),
         ("consensus_h05", "共识（热度 0.05）"),
     )
@@ -329,6 +424,7 @@ def run_walkforward() -> dict[str, Any] | None:
                 "label": label,
                 "tema_hits": stats[key]["tema"] if key in tema_keys else None,
                 "bao_hits": stats[key]["bao"],
+                "bao_expected": round(stats[key]["bao_expected"], 1),
                 "n": stats[key]["n"],
             }
             for key, label in labels
@@ -344,14 +440,23 @@ def run_walkforward() -> dict[str, Any] | None:
         },
         "lian": [
             {
-                "key": f"lian{size}",
-                "label": "三连肖" if size == 3 else "五连肖",
-                "hits": lian[size]["hits"],
-                "expected": round(lian[size]["expected"], 1),
+                "key": f"lian{size}" if kind == "current" else f"lian{size}_year",
+                "label": (
+                    f"{'三连肖' if size == 3 else '五连肖'}·"
+                    f"{'现行公式' if kind == 'current' else '锁当年肖'}"
+                ),
+                "hits": lian[kind][size]["hits"],
+                "expected": round(lian[kind][size]["expected"], 1),
                 "n": n,
             }
             for size in (3, 5)
+            for kind in ("current", "year")
         ],
+        "year_prior": {
+            "by_year": [by_year[year] for year in sorted(by_year)],
+            "override": override,
+            "note": _year_prior_note([by_year[year] for year in sorted(by_year)], override),
+        },
         "tema_tips": {
             "records": tema_tip_n,
             "hits": tema_tip_hit,
@@ -371,7 +476,12 @@ def refresh_backtest_if_needed(latest_drawn_period: int) -> dict[str, Any]:
     current = latest_backtest_snapshot()
     same_period = current and int(current.get("through_period") or 0) >= latest_drawn_period
     same_rule = bool(current) and current.get("rule") == _RULE
-    complete = bool(current) and "lian" in current and "consensus" in current
+    complete = (
+        bool(current)
+        and "lian" in current
+        and "consensus" in current
+        and "year_prior" in current
+    )
     if same_period and same_rule and complete:
         return {"updated": False, "snapshot": current}
     snapshot = run_walkforward()

@@ -26,7 +26,8 @@ def main() -> None:
         tema = row["tema_hits"]
         print(
             f"{row['label']} | 特码 {_rate(tema, n)}{'（基准 8.3%）' if tema is not None else ''}"
-            f" | 包肖 {_rate(int(row['bao_hits']), n)}（基准 {bao_base:.1%}）"
+            f" | 包肖 {_rate(int(row['bao_hits']), n)}（随机基准 {bao_base:.1%}）"
+            f" | 号码先验 {row.get('bao_expected', '—')} 次"
         )
     cons = snapshot.get("consensus")
     if cons:
@@ -42,8 +43,19 @@ def main() -> None:
             )
     for item in snapshot.get("lian") or []:
         print(
-            f"现行公式{item['label']} | 全出 {_rate(int(item['hits']), int(item['n']))}"
-            f"（靠运气预计 {item['expected']} 次）"
+            f"{item['label']} | 全出 {_rate(int(item['hits']), int(item['n']))}"
+            f"（号码先验 {item['expected']} 次）"
+        )
+    prior = snapshot.get("year_prior") or {}
+    if prior.get("note"):
+        print()
+        print(prior["note"])
+    for item in prior.get("by_year") or []:
+        print(
+            f"  {item['year']}{item['zodiac']} {item['n']} 期 | "
+            f"单肖现行 {item['current_bao']} / 永远当年肖 {item['year_bao']} | "
+            f"三连现行 {item['current_lian3']} / 锁当年 {item['year_lian3']} | "
+            f"五连现行 {item['current_lian5']} / 锁当年 {item['year_lian5']}"
         )
     tips = snapshot["tema_tips"]
     print()

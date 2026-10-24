@@ -51,6 +51,11 @@ def _sequence(year: int) -> tuple[str, ...]:
     return tuple(ZODIAC_ORDER[(start - i) % 12] for i in range(12))
 
 
+def year_zodiac(year: int) -> str:
+    """该生肖年占 5 个号码的那一只（号码 1、13、25、37、49）。"""
+    return _sequence(year)[0]
+
+
 def number_to_zodiac(num: int, year: int) -> str:
     if not 1 <= num <= 49:
         raise ValueError(f"号码超出范围: {num}")

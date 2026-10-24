@@ -375,10 +375,8 @@ th, td {
 }
 th { color: var(--muted); font-weight: 600; }
 
-.compare-table td:nth-child(2),
-.compare-table td:nth-child(3),
-.compare-table th:nth-child(2),
-.compare-table th:nth-child(3) {
+.compare-table td:nth-child(n + 2),
+.compare-table th:nth-child(n + 2) {
   font-variant-numeric: tabular-nums;
 }
 

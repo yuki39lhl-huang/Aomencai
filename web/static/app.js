@@ -70,7 +70,9 @@ function fillGroup(prefix, row) {
       </div>`
     )
     .join("");
-  metaEl.textContent = `平均得分 ${row.score}`;
+  metaEl.textContent = reasons.length
+    ? `平均得分 ${row.score} · ${reasons[0]}`
+    : `平均得分 ${row.score}`;
 }
 
 function fillPick(prefix, row) {
@@ -110,9 +112,9 @@ function renderHits(payload) {
   const hits = payload.hits || {};
   const by = hits.by_play || {};
   const plays = [
-    ["bao_xiao", "单肖", "约 48%"],
-    ["lian3", "三连肖", "约 8%"],
-    ["lian5", "五连肖", "不到 1%"],
+    ["bao_xiao", "单肖", "约 55%"],
+    ["lian3", "三连肖", "约 10%"],
+    ["lian5", "五连肖", "约 1%"],
     ["te_ma", "特码", "约 8%"],
   ];
 
@@ -378,7 +380,7 @@ function renderBacktest(snapshot) {
     .join("");
   const lian = snapshot.lian || [];
   lianEl.textContent = lian.length
-    ? "连肖要整组都出现才算中。锁当年肖把当年那只（5 个号）固定在组里，其余仍按现行排名取。"
+    ? "连肖要整组都出现才算中。线上已把当年肖放在第一位。表里的旧公式是改之前的排名，锁当年肖是对照。"
     : "";
   lianBody.innerHTML = lian
     .map(
@@ -391,7 +393,7 @@ function renderBacktest(snapshot) {
     .join("");
   const split = (snapshot.year_prior && snapshot.year_prior.by_year) || [];
   yearMeta.textContent = split.length
-    ? "按开奖日的生肖年切开。任一年没有高于「永远当年肖」或「锁当年肖」，正式公式不动。"
+    ? "按开奖日的生肖年切开，用来看旧公式和当年肖差多少。不拿某一期的中没中改回旧公式。"
     : "";
   yearBody.innerHTML = split
     .map(

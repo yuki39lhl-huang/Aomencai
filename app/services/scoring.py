@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta
 from typing import Any, Literal
 
 from app.config import settings
@@ -10,11 +11,36 @@ from app.repositories import (
     upsert_recommend,
 )
 from app.scrapers.tips import contributing_tips, tip_scores_for_period
-from app.services.zodiac import ZODIAC_ORDER, bao_xiao_hit
+from app.services.zodiac import ZODIAC_ORDER, bao_xiao_hit, lunar_year_for, year_zodiac
 
 _ZERO_TIPS = {z: 0.0 for z in ZODIAC_ORDER}
 
 PlayType = Literal["bao_xiao", "te_ma"]
+
+
+def _as_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str) and value[:10]:
+        return date.fromisoformat(value[:10])
+    return None
+
+
+def year_zodiac_for_period(target_period: int, draws: list[dict[str, Any]]) -> str:
+    """这一期开奖日所属生肖年里占 5 个号的那一只。还没开奖就用上一期的次日。"""
+    for row in draws:
+        if int(row["period"]) == target_period:
+            day = _as_date(row.get("draw_date"))
+            if day:
+                return year_zodiac(lunar_year_for(day))
+    prior = [row for row in draws if int(row["period"]) < target_period]
+    if prior:
+        day = _as_date(prior[-1].get("draw_date"))
+        if day:
+            return year_zodiac(lunar_year_for(day + timedelta(days=1)))
+    return year_zodiac(lunar_year_for(None))
 
 
 def _omit_bao(draws: list[dict[str, Any]]) -> dict[str, int]:
@@ -110,6 +136,7 @@ def _score_one(
     tip_raw: dict[str, float],
     tip_count: int,
     site_weights: dict[str, float] | None = None,
+    anchor: str | None = None,
 ) -> dict[str, Any]:
     if play_type == "bao_xiao":
         omit = _omit_bao(history)
@@ -158,6 +185,10 @@ def _score_one(
         key=lambda z: (totals[z], -abs(omit[z] - omit_center), -ZODIAC_ORDER.index(z)),
         reverse=True,
     )
+    formula_top = ranked[0]
+    # 单肖固定为当年肖。旧分只决定连肖里当年肖以外的名次，特码仍走上面的旧分。
+    if play_type == "bao_xiao" and anchor in ZODIAC_ORDER:
+        ranked = [anchor, *[z for z in ranked if z != anchor]]
     winner = ranked[0]
     place_rows = [
         {
@@ -209,6 +240,8 @@ def _score_one(
         "tip_count": tip_count,
         "history_count": len(history),
         "based_on_latest_draw": latest,
+        "year_zodiac": anchor if play_type == "bao_xiao" else None,
+        "formula_top": formula_top if play_type == "bao_xiao" else None,
         "reasons": _reasons(
             play_type=play_type,
             mode_label=mode_label,
@@ -220,6 +253,7 @@ def _score_one(
             tip_raw=tip_raw,
             tip_count=tip_count,
             omit_center=omit_center,
+            formula_top=formula_top,
         ),
     }
     upsert_recommend(target_period, play_type, winner, totals[winner], store_detail)
@@ -245,7 +279,7 @@ def _score_lian(
     bao: dict[str, Any],
     existing: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """连肖直接取包肖排名的前 3 / 前 5 名。已有中没中的整组锁定；单肖已锁定时不补写。"""
+    """连肖取单肖排名的前 3 / 前 5。单肖已把当年肖放在第一，所以组里必有当年肖。"""
     out: dict[str, Any] = {}
     ranking = bao.get("ranking") or []
     for play, size, label in _LIAN:
@@ -259,12 +293,14 @@ def _score_lian(
         group = ranking[:size]
         zodiacs = [p["zodiac"] for p in group]
         score = round(sum(p["score"] for p in group) / size, 4)
+        rest = "、".join(zodiacs[1:])
         detail = {
             "mode": play,
             "mode_label": label,
-            "hit_rule": f"{size}个生肖都出现在7个号码里才算中",
+            "hit_rule": f"当年肖在第一位，其余按旧分排。{size}个生肖都出现在7个号码里才算中",
             "places": group,
             "based_on_latest_draw": (bao.get("score_detail") or {}).get("based_on_latest_draw"),
+            "reasons": [f"第一只是当年肖「{zodiacs[0]}」，其余按旧公式：{rest}。"],
         }
         upsert_recommend(target_period, play, zodiacs[0], score, detail, zodiacs=zodiacs)
         out[play] = {
@@ -291,7 +327,22 @@ def _reasons(
     tip_raw: dict[str, float],
     tip_count: int,
     omit_center: int,
+    formula_top: str,
 ) -> list[str]:
+    if play_type == "bao_xiao":
+        fixed = (
+            f"单肖固定为当年肖「{winner}」。这一只占 5 个号，大约 55%；"
+            "其余每只 4 个号，大约 47%。"
+        )
+        if formula_top == winner:
+            fixed += "旧公式第一名也是这一只。"
+        else:
+            fixed += f"旧公式第一名是「{formula_top}」，只用来排连肖里当年肖以外的位置。"
+        return [
+            fixed,
+            "遗漏、热度和资料仍会计算，但不改单肖。",
+            f"包肖资料 {tip_count} 条，当年肖加权分 {round(tip_raw[winner], 4)}。",
+        ]
     lead = settings.score_min_lead
     omit_line = (
         f"{mode_label}遗漏 {omit[winner]} 期，越接近 {omit_center} 期分越高，"
@@ -337,6 +388,7 @@ def score_for_period(target_period: int) -> dict[str, Any]:
     )
     tip_raw_tema = dict(_ZERO_TIPS)
 
+    anchor = year_zodiac_for_period(target_period, draws)
     bao = _score_one(
         play_type="bao_xiao",
         target_period=target_period,
@@ -345,6 +397,7 @@ def score_for_period(target_period: int) -> dict[str, Any]:
         tip_raw=tip_raw_bao,
         tip_count=bao_tip_count,
         site_weights=bao_site_w,
+        anchor=anchor,
     )
     tema = _score_one(
         play_type="te_ma",

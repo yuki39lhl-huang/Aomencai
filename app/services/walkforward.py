@@ -28,7 +28,7 @@ from app.services.zodiac import ZODIAC_ORDER, bao_xiao_hit, lunar_year_for, year
 from app.sites import enabled_tip_sites
 
 _START = 40
-_RULE = "pre_draw_21_32_year_prior"
+_RULE = "pre_draw_21_32_year_live"
 # 共识实验：热度权重两档；资料只认至少这么多个启用站同推的肖
 _CONSENSUS_HOT_WEIGHTS = {"consensus_h0": 0.0, "consensus_h05": 0.05}
 _CONSENSUS_MIN_SITES = 2
@@ -177,40 +177,24 @@ def _all_hit(group: list[str], row: dict[str, Any]) -> int:
 
 
 def _year_prior_note(by_year: list[dict[str, Any]], override: dict[str, dict[str, int]]) -> str:
-    """对照结论只写句子，不改推荐。任一生肖年没有高于当年肖基准，正式公式就不动。"""
+    """线上已经改用当年肖。by_year 仍由调用方传入，句子里不再用它否决。"""
+    del by_year
     parts = [
         "号码先验按生肖占几个号计算（当年肖 5 个，其余各 4 个），不是 12 肖均匀。",
-        "永远当年肖、锁当年肖只进对照，不写推荐。",
+        "线上单肖固定为当年肖；三连、五连把当年肖放在第一位，其余按旧公式排名。这张表里的旧公式只作对照。",
     ]
     single = override["single"]
     parts.append(
-        f"单肖现行公式改选非当年肖 {single['changed']} 期，"
-        f"这些期现行中 {single['current_hits']}、当年肖中 {single['year_hits']}。"
+        f"单肖旧公式改选非当年肖 {single['changed']} 期，"
+        f"这些期旧公式中 {single['current_hits']}、当年肖中 {single['year_hits']}。"
     )
     for key, label in (("lian3", "三连肖"), ("lian5", "五连肖")):
         item = override[key]
         parts.append(
             f"{label}组不同的 {item['changed']} 期，"
-            f"现行全中 {item['current_hits']}、锁当年肖全中 {item['year_hits']}。"
+            f"旧公式全中 {item['current_hits']}、锁当年肖全中 {item['year_hits']}。"
         )
-    plays = (
-        ("current_bao", "year_bao", "单肖"),
-        ("current_lian3", "year_lian3", "三连肖"),
-        ("current_lian5", "year_lian5", "五连肖"),
-    )
-    failed: list[str] = []
-    for bucket in by_year:
-        for current_key, year_key, label in plays:
-            if bucket[current_key] <= bucket[year_key]:
-                failed.append(f"{bucket['year']}{bucket['zodiac']}年{label}")
-    if not by_year:
-        parts.append("没有可分年的期，正式公式不动。")
-    elif failed:
-        parts.append(
-            "按生肖年切开后，" + "、".join(failed) + "没有高于对应的当年肖基准，正式公式不动。"
-        )
-    else:
-        parts.append("每个生肖年的单肖、三连肖、五连肖都高于当年肖基准。仍不自动改线上。")
+    parts.append("分年的格子只用来看旧公式有没有高出当年肖，不拿去改回旧公式。")
     return "".join(parts)
 
 
@@ -389,7 +373,7 @@ def run_walkforward() -> dict[str, Any] | None:
         ("cold", "追最冷"),
         ("gap", "靠近典型间隔"),
         ("hot", "只看热度"),
-        ("current", "现行公式"),
+        ("current", "旧公式"),
         ("year", "永远当年肖"),
         ("consensus_h0", "共识（热度 0）"),
         ("consensus_h05", "共识（热度 0.05）"),
@@ -406,7 +390,7 @@ def run_walkforward() -> dict[str, Any] | None:
         keep_zero = True
     tip_note += (
         f" 包肖资料只采用第一次抓到时间早于开奖 21:32 的名单：用了 {bao_used} 条，"
-        f"来不及证明的 {bao_skipped} 条没有进入现行公式。"
+        f"来不及证明的 {bao_skipped} 条没有进入旧公式。"
     )
     if tema_skipped:
         tip_note += f" 特码对照同样去掉来不及证明的 {tema_skipped} 条。"
@@ -443,7 +427,7 @@ def run_walkforward() -> dict[str, Any] | None:
                 "key": f"lian{size}" if kind == "current" else f"lian{size}_year",
                 "label": (
                     f"{'三连肖' if size == 3 else '五连肖'}·"
-                    f"{'现行公式' if kind == 'current' else '锁当年肖'}"
+                    f"{'旧公式' if kind == 'current' else '锁当年肖'}"
                 ),
                 "hits": lian[kind][size]["hits"],
                 "expected": round(lian[kind][size]["expected"], 1),

@@ -60,6 +60,7 @@ function fillGroup(prefix, row) {
     return;
   }
   const brief = prefix === "Lian5";
+  const reasons = asDetail(row).reasons || [];
   groupEl.innerHTML = places
     .map(
       (place) => `<div class="place">

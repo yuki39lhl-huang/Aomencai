@@ -192,6 +192,10 @@ h1 {
   color: var(--muted);
   font-size: 12px;
 }
+.score-quiet {
+  opacity: 0.55;
+  font-size: 11px;
+}
 .muted { color: var(--muted); }
 
 .meta { color: var(--muted); margin: 10px 0 8px; }
@@ -375,8 +379,10 @@ th, td {
 }
 th { color: var(--muted); font-weight: 600; }
 
-.compare-table td:nth-child(n + 2),
-.compare-table th:nth-child(n + 2) {
+.compare-table td:nth-child(2),
+.compare-table td:nth-child(3),
+.compare-table th:nth-child(2),
+.compare-table th:nth-child(3) {
   font-variant-numeric: tabular-nums;
 }
 

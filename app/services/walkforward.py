@@ -28,6 +28,7 @@ from app.services.zodiac import ZODIAC_ORDER, bao_xiao_hit, lunar_year_for, year
 from app.sites import enabled_tip_sites
 
 _START = 40
+_DRAW_CLOCK = time(21, 32)
 _RULE = "pre_draw_21_32_year_live"
 # 共识实验：热度权重两档；资料只认至少这么多个启用站同推的肖
 _CONSENSUS_HOT_WEIGHTS = {"consensus_h0": 0.0, "consensus_h05": 0.05}
@@ -198,17 +199,40 @@ def _year_prior_note(by_year: list[dict[str, Any]], override: dict[str, dict[str
     return "".join(parts)
 
 
+def _parse_moment(value: Any) -> datetime | None:
+    """日期、时间和常见字符串都收成不带时区的时间。对不上返回空，不让整次对照中断。"""
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone().replace(tzinfo=None)
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, time.min)
+    if isinstance(value, str):
+        text = value.strip().replace("T", " ")
+        if text.endswith("Z"):
+            text = text[:-1]
+        if "+" in text[10:]:
+            text = text[: text.rfind("+")]
+        for fmt, size in (
+            ("%Y-%m-%d %H:%M:%S.%f", 26),
+            ("%Y-%m-%d %H:%M:%S", 19),
+            ("%Y-%m-%d %H:%M", 16),
+            ("%Y-%m-%d", 10),
+        ):
+            try:
+                return datetime.strptime(text[:size], fmt)
+            except ValueError:
+                continue
+    return None
+
+
 def _known_before_draw(tip: dict[str, Any], draw: dict[str, Any]) -> bool:
     """只有第一次抓到的时间早于该期开奖 21:32，才算预测时已经看得到。"""
-    draw_day = draw.get("draw_date")
-    if isinstance(draw_day, datetime):
-        draw_day = draw_day.date()
-    if not isinstance(draw_day, date):
+    draw_moment = _parse_moment(draw.get("draw_date"))
+    seen = _parse_moment(tip.get("first_seen_at") or tip.get("scraped_at"))
+    if draw_moment is None or seen is None:
         return False
-    seen = tip.get("first_seen_at") or tip.get("scraped_at")
-    if not isinstance(seen, datetime):
-        return False
-    return seen < datetime.combine(draw_day, _DRAW_CLOCK)
+    return seen < datetime.combine(draw_moment.date(), _DRAW_CLOCK)
 
 
 def run_walkforward() -> dict[str, Any] | None:

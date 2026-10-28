@@ -8,5 +8,6 @@ DROP TABLE IF EXISTS site_tip_hit;
 DROP TABLE IF EXISTS recommend_log;
 DROP TABLE IF EXISTS site_tip;
 DROP TABLE IF EXISTS scrape_run;
+DROP TABLE IF EXISTS site_scrape_status;
 DROP TABLE IF EXISTS draw_result;
 SET FOREIGN_KEY_CHECKS = 1;

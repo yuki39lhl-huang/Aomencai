@@ -13,6 +13,14 @@ function setStatus(text, isErr) {
   el.className = "status" + (isErr ? " err" : "");
 }
 
+const FAIL_LABELS = {
+  timeout: "超时",
+  route_page: "线路页",
+  no_period: "无期号",
+  no_list: "没有名单",
+  fetch_error: "抓取失败",
+};
+
 const SITE_NAMES = {
   yanjiuyuan: "研究院",
   dinggeshui: "定个水",
@@ -59,24 +67,21 @@ function fillGroup(prefix, row) {
     metaEl.textContent = row ? "" : "下次刷新分析后生成";
     return;
   }
-  const brief = prefix === "Lian5";
   const reasons = asDetail(row).reasons || [];
   groupEl.innerHTML = places
     .map(
       (place) => `<div class="place">
         <p class="place-label">${escapeHTML(place.place)}</p>
         <p class="place-zodiac">${escapeHTML(place.zodiac || "—")}</p>
-        <p class="place-meta">得分 ${escapeHTML(place.score)}</p>
-        ${brief ? "" : `<p class="place-meta">遗漏 ${escapeHTML(place.omit)} · 热度 ${escapeHTML(place.hot)}</p>`}
+        <p class="place-meta">遗漏 ${escapeHTML(place.omit ?? "—")} · 热度 ${escapeHTML(place.hot ?? "—")}</p>
+        <p class="place-meta score-quiet">得分 ${escapeHTML(place.score)}</p>
       </div>`
     )
     .join("");
-  metaEl.textContent = reasons.length
-    ? `平均得分 ${row.score} · ${reasons[0]}`
-    : `平均得分 ${row.score}`;
+  metaEl.textContent = reasons.length ? reasons[0] : "";
 }
 
-function fillPick(prefix, row) {
+function fillPick(prefix, row, quietScore) {
   const zodiacEl = document.getElementById("zodiac" + prefix);
   const metaEl = document.getElementById("meta" + prefix);
   const reasonsEl = document.getElementById("reasons" + prefix);
@@ -91,11 +96,13 @@ function fillPick(prefix, row) {
   zodiacEl.textContent = row.zodiac;
   const detail = asDetail(row);
   const winner = detail.winner_detail || {};
-  const bits = [`得分 ${row.score}`];
+  const bits = [];
+  if (!quietScore) bits.push(`得分 ${row.score}`);
   if (winner.omit !== undefined) bits.push(`遗漏 ${winner.omit} 期`);
   if (winner.hot !== undefined) bits.push(`热度 ${winner.hot} 次`);
   metaEl.textContent = bits.join(" · ");
-  const reasons = detail.reasons || [];
+  const reasons = quietScore && row.score != null ? [`公式得分 ${row.score}，只作参考`] : [];
+  reasons.push(...(detail.reasons || []));
   reasonsEl.innerHTML = reasons.length
     ? reasons.map((r) => `<li>${escapeHTML(r)}</li>`).join("")
     : "<li>无</li>";
@@ -314,8 +321,12 @@ function renderRecommend(payload) {
     fillPick("Tema", null);
     fillGroup("Lian3", null);
     fillGroup("Lian5", null);
+    document.getElementById("yearZodiac").textContent = payload.year_zodiac
+      ? `固定当年肖：${payload.year_zodiac}`
+      : "";
     renderHits(payload);
-    renderBacktest(payload.backtest);
+    renderBacktest(payload.backtest, payload.backtest_error);
+    renderSiteAlerts(payload.site_alerts);
     renderManual(payload);
     return;
   }
@@ -326,12 +337,16 @@ function renderRecommend(payload) {
   const made = clockText(rec.bao_xiao && rec.bao_xiao.created_at);
   metaEl.textContent = `预测 ${rec.period} 期 · ${drawText}` + (made ? ` · 推荐生成于 ${made}` : "");
 
-  fillPick("Bao", rec.bao_xiao);
+  document.getElementById("yearZodiac").textContent = payload.year_zodiac
+    ? `固定当年肖：${payload.year_zodiac}`
+    : "";
+  fillPick("Bao", rec.bao_xiao, true);
   fillPick("Tema", rec.te_ma);
   fillGroup("Lian3", rec.lian3);
   fillGroup("Lian5", rec.lian5);
   renderHits(payload);
-  renderBacktest(payload.backtest);
+  renderBacktest(payload.backtest, payload.backtest_error);
+  renderSiteAlerts(payload.site_alerts);
   renderManual(payload);
 }
 
@@ -346,7 +361,21 @@ function expText(expected, total) {
   return `${n.toFixed(1)} 次 (${(n / total * 100).toFixed(1)}%)`;
 }
 
-function renderBacktest(snapshot) {
+function renderSiteAlerts(alerts) {
+  const el = document.getElementById("siteAlerts");
+  const rows = alerts || [];
+  el.textContent = rows.length
+    ? rows
+        .map((item) => {
+          const name = SITE_NAMES[item.site] || item.name || item.site;
+          const reason = item.fail_label || FAIL_LABELS[item.fail_reason] || "抓取失败";
+          return `${name} 连续 ${item.fail_streak} 次没抓到（${reason}），本期沿用上次名单`;
+        })
+        .join("；")
+    : "";
+}
+
+function renderBacktest(snapshot, errorText) {
   const meta = document.getElementById("backtestMeta");
   const body = document.getElementById("backtestBody");
   const note = document.getElementById("backtestNote");
@@ -355,7 +384,9 @@ function renderBacktest(snapshot) {
   const yearMeta = document.getElementById("backtestYearMeta");
   const yearBody = document.getElementById("backtestYearBody");
   if (!snapshot) {
-    meta.textContent = "还没有对照。新开奖写入后，点一次「刷新分析」就会算出。";
+    meta.textContent = errorText
+      ? `公式对照这次没算成：${errorText}`
+      : "还没有对照。新开奖写入后，点一次「刷新分析」就会算出。";
     body.innerHTML = "";
     lianEl.textContent = "";
     lianBody.innerHTML = "";
@@ -424,7 +455,8 @@ function renderBacktest(snapshot) {
       "。"
     : "";
   const yearNote = (snapshot.year_prior && snapshot.year_prior.note) || "";
-  note.textContent = `${yearNote}${yearNote ? " " : ""}${tips.note || ""}${consText}`;
+  const errorNote = errorText ? `这次没重算：${errorText} ` : "";
+  note.textContent = `${errorNote}${yearNote}${yearNote ? " " : ""}${tips.note || ""}${consText}`;
 }
 
 function renderDraws(items) {
@@ -464,6 +496,7 @@ async function doRefresh() {
     const tema = result.recommend.te_ma.zodiac;
     const lian3 = groupZodiacs(result.recommend.lian3).join("");
     const notes = [];
+    if (result.backtest_error) notes.push(`公式对照没更新：${result.backtest_error}`);
     if (result.live_error) notes.push("实时开奖暂时无效，已用库里的开奖继续");
     if (result.history_error || result.history_light_error) notes.push("历史页暂时连不上");
     const extra = notes.length ? `（${notes.join("；")}）` : "";

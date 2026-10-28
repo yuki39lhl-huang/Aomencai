@@ -13,10 +13,13 @@ from app.repositories import (
     latest_backtest_snapshot,
     latest_scrape_run,
     list_draws,
+    list_site_alerts,
     update_recommend_hit,
 )
 from app.services.reconcile import hit_summary, reconcile_pending, site_weights_for_period
+from app.scrapers.tips import FAIL_REASON_LABEL
 from app.services.scoring import latest_recommendation, score_for_period
+from app.services.zodiac import lunar_year_for, year_zodiac
 
 router = APIRouter(prefix="/api")
 
@@ -55,6 +58,16 @@ def latest_recommend_api():
         "site_weights": weights,
         "hits": hit_summary(limit=20),
         "backtest": latest_backtest_snapshot(),
+        "year_zodiac": year_zodiac(lunar_year_for(None)),
+        "site_alerts": [
+            {
+                "site": row["site_code"],
+                "fail_streak": int(row["fail_streak"]),
+                "fail_reason": row.get("last_reason"),
+                "fail_label": FAIL_REASON_LABEL.get(row.get("last_reason") or "", row.get("last_reason")),
+            }
+            for row in list_site_alerts()
+        ],
     }
 
 

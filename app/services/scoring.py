@@ -7,6 +7,7 @@ from app.config import settings
 from app.repositories import (
     get_recommends_for_period,
     list_draws_asc,
+    list_locked_bao_missing_lian,
     list_tips,
     upsert_recommend,
 )
@@ -210,6 +211,7 @@ def _score_one(
         None,
     )
     if existing:
+        stored_rank = (existing.get("score_detail") or {}).get("ranking") or []
         return {
             "period": target_period,
             "play_type": play_type,
@@ -218,6 +220,7 @@ def _score_one(
             "zodiac": existing["zodiac"],
             "score": round(float(existing["score"]), 4),
             "score_detail": existing.get("score_detail") or {},
+            "ranking": stored_rank or place_rows,
             "locked": True,
         }
 
@@ -237,6 +240,7 @@ def _score_one(
         },
         "site_weights": site_weights or {},
         "winner_detail": detail_per[winner],
+        "ranking": place_rows,
         "tip_count": tip_count,
         "history_count": len(history),
         "based_on_latest_draw": latest,
@@ -287,9 +291,17 @@ def _score_lian(
         if row and (row.get("hit") is not None or bao.get("locked")):
             out[play] = {**row, "mode_label": label, "locked": row.get("hit") is not None}
             continue
-        if bao.get("locked") or len(ranking) < size:
+        if len(ranking) < size:
             out[play] = None
             continue
+        if bao.get("locked") and ranking[0]["zodiac"] != bao.get("zodiac"):
+            out[play] = None
+            continue
+        if bao.get("locked") and play == "lian5":
+            stored3 = (existing.get("lian3") or {}).get("zodiacs") or []
+            if stored3 and [p["zodiac"] for p in ranking[:3]] != list(stored3):
+                out[play] = None
+                continue
         group = ranking[:size]
         zodiacs = [p["zodiac"] for p in group]
         score = round(sum(p["score"] for p in group) / size, 4)
@@ -313,6 +325,93 @@ def _score_lian(
             "score_detail": detail,
         }
     return out
+
+
+def _compute_bao_places(target_period: int) -> list[dict[str, Any]]:
+    """按旧分重算名次，当年肖放回第一。只用于补写缺的连肖，不改已锁定的单肖。"""
+    from app.services.reconcile import site_weights_for_period
+
+    draws = list_draws_asc()
+    history = [d for d in draws if int(d["period"]) < target_period]
+    if not history:
+        return []
+    tips = list_tips(target_period)
+    weights = site_weights_for_period("bao_xiao", target_period)
+    tip_raw = tip_scores_for_period(
+        target_period, tips, play_type="bao_xiao", site_weights=weights
+    )
+    omit = _omit_bao(history)
+    hot = _hot_bao(history, settings.hot_window)
+    center = settings.bao_omit_center
+    omit_n = _gap_component(omit, center=center, half_width=settings.bao_omit_half)
+    hot_n = _scaled_component(hot, min_lead=settings.score_min_lead, full_at=settings.hot_window)
+    tip_n = _normalize(tip_raw)
+    totals = {
+        z: settings.weight_omit * omit_n[z] + settings.weight_hot * hot_n[z] + settings.weight_tip * tip_n[z]
+        for z in ZODIAC_ORDER
+    }
+    ranked = sorted(
+        ZODIAC_ORDER,
+        key=lambda z: (totals[z], -abs(omit[z] - center), -ZODIAC_ORDER.index(z)),
+        reverse=True,
+    )
+    anchor = year_zodiac_for_period(target_period, draws)
+    if anchor in ranked:
+        ranked = [anchor, *[z for z in ranked if z != anchor]]
+    return [
+        {
+            "place": label,
+            "zodiac": z,
+            "score": round(totals[z], 4),
+            "omit": omit[z],
+            "hot": hot[z],
+        }
+        for label, z in zip(_PLACE_LABELS, ranked)
+    ]
+
+
+def _write_lian(period: int, size: int, places: list[dict[str, Any]]) -> None:
+    group = places[:size]
+    zodiacs = [p["zodiac"] for p in group]
+    play = "lian3" if size == 3 else "lian5"
+    label = "三连肖" if size == 3 else "五连肖"
+    score = round(sum(float(p["score"]) for p in group) / size, 4)
+    detail = {
+        "mode": play,
+        "mode_label": label,
+        "hit_rule": f"{size}个生肖都出现在7个号码里才算中",
+        "places": group,
+        "backfill": "locked_bao",
+    }
+    upsert_recommend(period, play, zodiacs[0], score, detail, zodiacs=zodiacs)
+
+
+def backfill_missing_lian() -> dict[str, Any]:
+    """单肖已有中没中、却缺连肖时补写一次。第一名必须还是这只已锁定的肖。"""
+    wrote: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for row in list_locked_bao_missing_lian():
+        period = int(row["period"])
+        detail = row.get("score_detail") or {}
+        places = list(detail.get("ranking") or [])
+        if not places or places[0].get("zodiac") != row["zodiac"]:
+            places = _compute_bao_places(period)
+        if not places or places[0].get("zodiac") != row["zodiac"]:
+            skipped.append({"period": period, "reason": "排名和已锁定的单肖不一致"})
+            continue
+        stored3 = list(row.get("lian3_zodiacs") or [])
+        if not stored3:
+            _write_lian(period, 3, places)
+            wrote.append({"period": period, "play_type": "lian3", "zodiacs": [p["zodiac"] for p in places[:3]]})
+            stored3 = [p["zodiac"] for p in places[:3]]
+        if row.get("lian5_period") is None:
+            top3 = [p["zodiac"] for p in places[:3]]
+            if stored3 != top3:
+                skipped.append({"period": period, "reason": "五连肖和已记下的三连肖对不上"})
+            else:
+                _write_lian(period, 5, places)
+                wrote.append({"period": period, "play_type": "lian5", "zodiacs": [p["zodiac"] for p in places[:5]]})
+    return {"wrote": wrote, "skipped": skipped}
 
 
 def _reasons(

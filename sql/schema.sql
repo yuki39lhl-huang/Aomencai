@@ -78,6 +78,16 @@ CREATE TABLE IF NOT EXISTS scrape_run (
   KEY idx_started_at (started_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='抓取运行日志表';
 
+CREATE TABLE IF NOT EXISTS site_scrape_status (
+  site_code VARCHAR(32) NOT NULL COMMENT '站点代号',
+  fail_streak INT NOT NULL DEFAULT 0 COMMENT '连续没抓到名单的次数',
+  last_reason VARCHAR(32) NULL COMMENT '最近一次失败原因：timeout/route_page/no_period/no_list/fetch_error',
+  last_detail VARCHAR(300) NULL COMMENT '最近一次失败说明',
+  updated_at DATETIME NOT NULL COMMENT '最近更新时间',
+  PRIMARY KEY (site_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='站点抓取成败。连续失败只用于面板告警，不改打分权重';
+
 CREATE TABLE IF NOT EXISTS backtest_snapshot (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   through_period INT UNSIGNED NOT NULL COMMENT '回测用到的最新已开奖期',
@@ -85,4 +95,4 @@ CREATE TABLE IF NOT EXISTS backtest_snapshot (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '写入时间',
   PRIMARY KEY (id),
   KEY idx_through_period (through_period)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='滚动回测快照。不改推荐，不改权重';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='滚动回测快照。只留最近 8 条，不改推荐，不改权重';

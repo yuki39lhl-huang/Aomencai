@@ -155,6 +155,122 @@ def replace_site_tips(period: int, rows_by_site: dict[str, list[dict[str, Any]]]
             )
 
 
+def ensure_site_scrape_table() -> None:
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS site_scrape_status (
+              site_code VARCHAR(32) NOT NULL COMMENT '站点代号',
+              fail_streak INT NOT NULL DEFAULT 0 COMMENT '连续没抓到名单的次数',
+              last_reason VARCHAR(32) NULL COMMENT '最近一次失败原因',
+              last_detail VARCHAR(300) NULL COMMENT '最近一次失败说明',
+              updated_at DATETIME NOT NULL COMMENT '最近更新时间',
+              PRIMARY KEY (site_code)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+              COMMENT='站点抓取成败。连续失败只用于面板告警，不改打分权重'
+            """
+        )
+
+
+def record_site_scrape(
+    site_code: str, *, ok: bool, reason: str | None = None, detail: str | None = None
+) -> dict[str, Any]:
+    """成功清零。失败累加。连续 3 次没抓到才告警，不改站点权重。"""
+    ensure_site_scrape_table()
+    now = datetime.now()
+    short = (detail or "")[:300] or None
+    with db_cursor() as cur:
+        if ok:
+            cur.execute(
+                """
+                INSERT INTO site_scrape_status (site_code, fail_streak, last_reason, last_detail, updated_at)
+                VALUES (%s, 0, NULL, NULL, %s)
+                ON DUPLICATE KEY UPDATE
+                  fail_streak=0, last_reason=NULL, last_detail=NULL, updated_at=VALUES(updated_at)
+                """,
+                (site_code, now),
+            )
+            streak = 0
+            saved_reason = None
+        else:
+            cur.execute(
+                """
+                INSERT INTO site_scrape_status (site_code, fail_streak, last_reason, last_detail, updated_at)
+                VALUES (%s, 1, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                  fail_streak=fail_streak+1,
+                  last_reason=VALUES(last_reason),
+                  last_detail=VALUES(last_detail),
+                  updated_at=VALUES(updated_at)
+                """,
+                (site_code, reason, short, now),
+            )
+            cur.execute(
+                "SELECT fail_streak, last_reason FROM site_scrape_status WHERE site_code=%s",
+                (site_code,),
+            )
+            row = cur.fetchone() or {}
+            streak = int(row.get("fail_streak") or 0)
+            saved_reason = row.get("last_reason")
+    return {
+        "site_code": site_code,
+        "fail_streak": streak,
+        "reason": saved_reason,
+        "alert": streak >= 3,
+    }
+
+
+def list_site_alerts() -> list[dict[str, Any]]:
+    ensure_site_scrape_table()
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT site_code, fail_streak, last_reason, last_detail, updated_at
+            FROM site_scrape_status
+            WHERE fail_streak >= 3
+            ORDER BY fail_streak DESC, site_code
+            """
+        )
+        return list(cur.fetchall())
+
+
+def list_locked_bao_missing_lian() -> list[dict[str, Any]]:
+    """已有中没中、但缺三连肖或五连肖的单肖。"""
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT b.period, b.zodiac, b.score, b.score_detail, b.hit,
+                   l3.zodiacs AS lian3_zodiacs,
+                   l5.period AS lian5_period
+            FROM recommend_log b
+            LEFT JOIN recommend_log l3
+              ON l3.period = b.period AND l3.play_type = 'lian3'
+            LEFT JOIN recommend_log l5
+              ON l5.period = b.period AND l5.play_type = 'lian5'
+            WHERE b.play_type = 'bao_xiao'
+              AND b.hit IS NOT NULL
+              AND (l3.period IS NULL OR l5.period IS NULL)
+            ORDER BY b.period
+            """
+        )
+        rows = list(cur.fetchall())
+    for row in rows:
+        row["score_detail"] = _parse_detail(row.get("score_detail"))
+        row["lian3_zodiacs"] = _load_zodiacs(row.get("lian3_zodiacs")) or None
+    return rows
+
+
+def _parse_detail(value: Any) -> dict[str, Any]:
+    if isinstance(value, (bytes, bytearray)):
+        value = value.decode("utf-8")
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return value if isinstance(value, dict) else {}
+
+
 def list_tips(period: int) -> list[dict[str, Any]]:
     with db_cursor() as cur:
         cur.execute(
@@ -222,6 +338,9 @@ def ensure_backtest_table() -> None:
         )
 
 
+_SNAPSHOT_KEEP = 8
+
+
 def save_backtest_snapshot(through_period: int, payload: dict[str, Any]) -> None:
     ensure_backtest_table()
     with db_cursor() as cur:
@@ -231,6 +350,17 @@ def save_backtest_snapshot(through_period: int, payload: dict[str, Any]) -> None
             VALUES (%s, %s)
             """,
             (through_period, json.dumps(payload, ensure_ascii=False)),
+        )
+        cur.execute(
+            """
+            DELETE FROM backtest_snapshot
+            WHERE id NOT IN (
+                SELECT id FROM (
+                    SELECT id FROM backtest_snapshot ORDER BY id DESC LIMIT %s
+                ) AS kept
+            )
+            """,
+            (_SNAPSHOT_KEEP,),
         )
 
 

@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 
 from app.repositories import (
     list_tip_first_seen,
+    record_site_scrape,
     replace_site_tips,
     tip_first_seen_key,
 )
+
+FAIL_REASON_LABEL = {
+    "timeout": "超时",
+    "route_page": "线路页",
+    "no_period": "无期号",
+    "no_list": "没有名单",
+    "fetch_error": "抓取失败",
+}
+_ROUTE_MARKS = ("点击进入", "进入网站", "立即进入", "线路选择", "选择线路")
 from app.services.zodiac import ZODIAC_ORDER
 from app.sites import TipSite, all_tip_fetch_urls, enabled_tip_sites
 
@@ -157,6 +168,23 @@ def select_ladder_tips(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return kept
 
 
+def classify_empty_page(text: str, period: int) -> str:
+    """页面打开了，但没有可用名单。线路页、找不到期号、有期号但抽不出肖，分开记。"""
+    body = text or ""
+    if f"{period}期" not in body:
+        if any(mark in body for mark in _ROUTE_MARKS):
+            return "route_page"
+        return "no_period"
+    return "no_list"
+
+
+def classify_fetch_error(exc: BaseException) -> str:
+    blob = f"{type(exc).__name__} {exc}".lower()
+    if "timeout" in blob or "timed out" in blob:
+        return "timeout"
+    return "fetch_error"
+
+
 def extract_candidates(text: str, period: int) -> list[dict[str, Any]]:
     """当期段落里的肖名单，阶梯合并后入库。"""
     scope = _scope_for_period(text, period)
@@ -262,6 +290,9 @@ async def scrape_tip_site(
     rows: list[dict[str, Any]] = []
     used: list[str] = []
     strategies_used: list[str] = []
+    empty_reason: str | None = None
+    error_reason: str | None = None
+    error_detail = ""
     prefer = site.prefer_frames or "dinggeshui" in site.code
 
     urls = all_tip_fetch_urls(site)
@@ -281,7 +312,9 @@ async def scrape_tip_site(
                     strategies_used.append(s)
             if found:
                 rows = found
+                empty_reason = None
                 break
+            empty_reason = classify_empty_page(text, period)
             # 主 URL 抽不到：发现子链接换源再比
             if not tried_extra:
                 tried_extra = True
@@ -292,8 +325,16 @@ async def scrape_tip_site(
                     if e not in urls:
                         urls.append(e)
         except Exception as exc:
-            used.append(f"{url}#err:{type(exc).__name__}:{exc}")
+            error_reason = classify_fetch_error(exc)
+            error_detail = f"{type(exc).__name__}: {exc}"
+            used.append(f"{url}#err:{error_detail}")
 
+    if rows:
+        fail_reason = None
+    elif empty_reason:
+        fail_reason = empty_reason
+    else:
+        fail_reason = error_reason or "fetch_error"
     return {
         "site": site.code,
         "name": site.name,
@@ -302,6 +343,8 @@ async def scrape_tip_site(
         "urls": used,
         "strategies": strategies_used,
         "note": site.note,
+        "fail_reason": fail_reason,
+        "fail_detail": "" if rows else (error_detail if fail_reason == error_reason else ""),
     }
 
 
@@ -315,11 +358,32 @@ async def sync_tips(period: int) -> dict[str, Any]:
         rows = item.pop("rows")
         if rows:
             fresh[site.code] = rows
+            status = record_site_scrape(site.code, ok=True)
+        else:
+            status = record_site_scrape(
+                site.code,
+                ok=False,
+                reason=item.get("fail_reason"),
+                detail=item.get("fail_detail") or item.get("fail_reason"),
+            )
+        item["fail_streak"] = status["fail_streak"]
+        item["alert"] = status["alert"]
         results["sites"].append(item)
         results[site.code] = item
     replace_site_tips(period, fresh)
     results["saved_total"] = sum(len(rows) for rows in fresh.values())
     results["kept_sites"] = [s["site"] for s in results["sites"] if not s["saved"]]
+    results["alerts"] = [
+        {
+            "site": item["site"],
+            "name": item.get("name") or item["site"],
+            "fail_streak": item.get("fail_streak"),
+            "fail_reason": item.get("fail_reason"),
+            "fail_label": FAIL_REASON_LABEL.get(item.get("fail_reason") or "", item.get("fail_reason")),
+        }
+        for item in results["sites"]
+        if item.get("alert")
+    ]
     return results
 
 

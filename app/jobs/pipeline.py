@@ -10,7 +10,7 @@ from app.services.reconcile import (
     reconcile_recommend_period,
     reconcile_site_tips_period,
 )
-from app.services.scoring import score_for_period
+from app.services.scoring import backfill_missing_lian, score_for_period
 from app.services.walkforward import refresh_backtest_if_needed
 
 
@@ -50,7 +50,11 @@ async def refresh_all(*, full_history: bool = False) -> dict[str, Any]:
         if not draw:
             raise RuntimeError("未获取到开奖数据")
 
-        # 开奖入库后先对账已开期，再抓下期 tip / 打分（降权用历史命中）
+        # 先补缺的连肖，再对账，这样新补的行能在同一次刷新里记下中没中
+        try:
+            summary["lian_backfill"] = backfill_missing_lian()
+        except Exception as exc:
+            summary["lian_backfill_error"] = _exc_text(exc)
         summary["reconcile"] = reconcile_pending()
         latest_period = int(draw["period"])
         summary["reconcile_latest"] = {

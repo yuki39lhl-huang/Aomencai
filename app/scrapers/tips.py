@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime
 from typing import Any
 
 from app.repositories import (
     list_tip_first_seen,
+    list_tips,
     record_site_scrape,
     replace_site_tips,
     tip_first_seen_key,
 )
+from app.services.zodiac import ZODIAC_ORDER
+from app.sites import TipSite, all_tip_fetch_urls, enabled_tip_sites
+
+# 单站抓取上限，避免某一站线路页把整次开奖前刷新拖死
+_SITE_SCRAPE_TIMEOUT_SEC = 75
 
 FAIL_REASON_LABEL = {
     "timeout": "超时",
@@ -19,8 +26,6 @@ FAIL_REASON_LABEL = {
     "fetch_error": "抓取失败",
 }
 _ROUTE_MARKS = ("点击进入", "进入网站", "立即进入", "线路选择", "选择线路")
-from app.services.zodiac import ZODIAC_ORDER
-from app.sites import TipSite, all_tip_fetch_urls, enabled_tip_sites
 
 _XIAO_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 _ZODIAC_CHARS = set("鼠牛虎兔龙蛇马羊猴鸡狗猪")
@@ -349,25 +354,50 @@ async def scrape_tip_site(
 
 
 async def sync_tips(period: int) -> dict[str, Any]:
-    """全部站抓完后再替换。这次没抓到名单的站保留上次的名单，避免一次超时让分数跳动。"""
+    """全部站抓完后再替换。这次没抓到名单的站保留上次的名单，避免一次超时让分数跳动。
+
+    单站超时只记该站失败，不中断其余站，开奖前 21:00–21:20 再刷也能补齐。
+    """
     prior_seen = list_tip_first_seen(period)
+    prior_sites = {str(tip.get("site_code") or "") for tip in list_tips(period)}
     results: dict[str, Any] = {"period": period, "sites": []}
     fresh: dict[str, list[dict[str, Any]]] = {}
     for site in enabled_tip_sites():
-        item = await scrape_tip_site(period, site, prior_seen)
+        try:
+            item = await asyncio.wait_for(
+                scrape_tip_site(period, site, prior_seen),
+                timeout=_SITE_SCRAPE_TIMEOUT_SEC,
+            )
+        except asyncio.TimeoutError:
+            item = {
+                "site": site.code,
+                "name": site.name,
+                "saved": 0,
+                "rows": [],
+                "urls": [],
+                "strategies": [],
+                "note": site.note,
+                "fail_reason": "timeout",
+                "fail_detail": f"单站超过 {_SITE_SCRAPE_TIMEOUT_SEC}s",
+            }
         rows = item.pop("rows")
+        had_prior = site.code in prior_sites
         if rows:
             fresh[site.code] = rows
-            status = record_site_scrape(site.code, ok=True)
+            status = record_site_scrape(site.code, ok=True, period=period)
         else:
             status = record_site_scrape(
                 site.code,
                 ok=False,
+                period=period,
                 reason=item.get("fail_reason"),
                 detail=item.get("fail_detail") or item.get("fail_reason"),
+                had_prior_tips=had_prior,
             )
         item["fail_streak"] = status["fail_streak"]
         item["alert"] = status["alert"]
+        item["reuse"] = status.get("reuse")
+        item["counted"] = status.get("counted")
         results["sites"].append(item)
         results[site.code] = item
     replace_site_tips(period, fresh)
@@ -379,7 +409,10 @@ async def sync_tips(period: int) -> dict[str, Any]:
             "name": item.get("name") or item["site"],
             "fail_streak": item.get("fail_streak"),
             "fail_reason": item.get("fail_reason"),
-            "fail_label": FAIL_REASON_LABEL.get(item.get("fail_reason") or "", item.get("fail_reason")),
+            "fail_label": FAIL_REASON_LABEL.get(
+                item.get("fail_reason") or "", item.get("fail_reason")
+            ),
+            "reuse": item.get("reuse"),
         }
         for item in results["sites"]
         if item.get("alert")

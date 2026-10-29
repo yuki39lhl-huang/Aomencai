@@ -369,7 +369,11 @@ function renderSiteAlerts(alerts) {
         .map((item) => {
           const name = SITE_NAMES[item.site] || item.name || item.site;
           const reason = item.fail_label || FAIL_LABELS[item.fail_reason] || "抓取失败";
-          return `${name} 连续 ${item.fail_streak} 次没抓到（${reason}），本期沿用上次名单`;
+          const reuse =
+            item.reuse === "same_period"
+              ? "同期间沿用上次名单"
+              : "新年号尚无名单可沿用";
+          return `${name} 连续 ${item.fail_streak} 期没抓到（${reason}），${reuse}`;
         })
         .join("；")
     : "";

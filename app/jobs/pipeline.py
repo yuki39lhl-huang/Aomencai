@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.repositories import finish_scrape_run, latest_draw, start_scrape_run
+from app.repositories import (
+    expire_stale_scrape_runs,
+    finish_scrape_run,
+    latest_draw,
+    start_scrape_run,
+)
 from app.scrapers.history import sync_history, sync_live_data
 from app.scrapers.tips import sync_tips
 from app.services.reconcile import (
@@ -39,8 +44,9 @@ async def _sync_history_safe(summary: dict[str, Any], key: str) -> None:
 
 
 async def refresh_all(*, full_history: bool = False) -> dict[str, Any]:
+    cleared = expire_stale_scrape_runs()
     run_id = start_scrape_run("bootstrap" if full_history else "refresh")
-    summary: dict[str, Any] = {"full_history": full_history}
+    summary: dict[str, Any] = {"full_history": full_history, "expired_runs": cleared}
     try:
         await _sync_live_safe(summary)
         await _sync_history_safe(summary, "history" if full_history else "history_light")

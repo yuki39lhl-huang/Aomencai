@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from app.db import db_cursor
@@ -28,8 +28,16 @@ def upsert_draw(
       n1=VALUES(n1), n2=VALUES(n2), n3=VALUES(n3),
       n4=VALUES(n4), n5=VALUES(n5), n6=VALUES(n6),
       special=VALUES(special),
-      special_zodiac=VALUES(special_zodiac),
-      source=VALUES(source)
+      special_zodiac=IF(
+        draw_result.source='history' AND VALUES(source)='live',
+        draw_result.special_zodiac,
+        VALUES(special_zodiac)
+      ),
+      source=IF(
+        draw_result.source='history' AND VALUES(source)='live',
+        draw_result.source,
+        VALUES(source)
+      )
     """
     with db_cursor() as cur:
         cur.execute(
@@ -161,62 +169,118 @@ def ensure_site_scrape_table() -> None:
             """
             CREATE TABLE IF NOT EXISTS site_scrape_status (
               site_code VARCHAR(32) NOT NULL COMMENT '站点代号',
-              fail_streak INT NOT NULL DEFAULT 0 COMMENT '连续没抓到名单的次数',
+              fail_streak INT NOT NULL DEFAULT 0 COMMENT '连续没抓到名单的期数',
               last_reason VARCHAR(32) NULL COMMENT '最近一次失败原因',
               last_detail VARCHAR(300) NULL COMMENT '最近一次失败说明',
+              last_period INT NULL COMMENT '最近一次记录的期号',
+              last_fail_period INT NULL COMMENT '最近一次失败计入连击的期号',
               updated_at DATETIME NOT NULL COMMENT '最近更新时间',
               PRIMARY KEY (site_code)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
               COMMENT='站点抓取成败。连续失败只用于面板告警，不改打分权重'
             """
         )
+        cur.execute("SHOW COLUMNS FROM site_scrape_status")
+        cols = {str(row["Field"]) for row in cur.fetchall()}
+        if "last_period" not in cols:
+            cur.execute(
+                "ALTER TABLE site_scrape_status ADD COLUMN last_period INT NULL COMMENT '最近一次记录的期号' AFTER last_detail"
+            )
+        if "last_fail_period" not in cols:
+            cur.execute(
+                "ALTER TABLE site_scrape_status ADD COLUMN last_fail_period INT NULL COMMENT '最近一次失败计入连击的期号' AFTER last_period"
+            )
 
 
 def record_site_scrape(
-    site_code: str, *, ok: bool, reason: str | None = None, detail: str | None = None
+    site_code: str,
+    *,
+    ok: bool,
+    period: int | None = None,
+    reason: str | None = None,
+    detail: str | None = None,
+    had_prior_tips: bool = False,
 ) -> dict[str, Any]:
-    """成功清零。失败累加。连续 3 次没抓到才告警，不改站点权重。"""
+    """成功清零。失败按期号去重累加。同一期重复刷新不把连击再加一。"""
     ensure_site_scrape_table()
     now = datetime.now()
     short = (detail or "")[:300] or None
     with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT fail_streak, last_reason, last_period, last_fail_period
+            FROM site_scrape_status WHERE site_code=%s
+            """,
+            (site_code,),
+        )
+        prev = cur.fetchone() or {}
         if ok:
             cur.execute(
                 """
-                INSERT INTO site_scrape_status (site_code, fail_streak, last_reason, last_detail, updated_at)
-                VALUES (%s, 0, NULL, NULL, %s)
+                INSERT INTO site_scrape_status
+                  (site_code, fail_streak, last_reason, last_detail, last_period, last_fail_period, updated_at)
+                VALUES (%s, 0, NULL, NULL, %s, NULL, %s)
                 ON DUPLICATE KEY UPDATE
-                  fail_streak=0, last_reason=NULL, last_detail=NULL, updated_at=VALUES(updated_at)
+                  fail_streak=0, last_reason=NULL, last_detail=NULL,
+                  last_period=VALUES(last_period), last_fail_period=NULL,
+                  updated_at=VALUES(updated_at)
                 """,
-                (site_code, now),
+                (site_code, period, now),
             )
             streak = 0
             saved_reason = None
+            counted = False
         else:
+            last_fail_period = prev.get("last_fail_period")
+            same_period = (
+                period is not None
+                and last_fail_period is not None
+                and int(last_fail_period) == int(period)
+            )
+            streak = int(prev.get("fail_streak") or 0)
+            if same_period:
+                counted = False
+            else:
+                streak += 1
+                counted = True
             cur.execute(
                 """
-                INSERT INTO site_scrape_status (site_code, fail_streak, last_reason, last_detail, updated_at)
-                VALUES (%s, 1, %s, %s, %s)
+                INSERT INTO site_scrape_status
+                  (site_code, fail_streak, last_reason, last_detail, last_period, last_fail_period, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
-                  fail_streak=fail_streak+1,
+                  fail_streak=%s,
                   last_reason=VALUES(last_reason),
                   last_detail=VALUES(last_detail),
+                  last_period=VALUES(last_period),
+                  last_fail_period=VALUES(last_fail_period),
                   updated_at=VALUES(updated_at)
                 """,
-                (site_code, reason, short, now),
+                (
+                    site_code,
+                    streak,
+                    reason,
+                    short,
+                    period,
+                    period if counted or last_fail_period is None else last_fail_period,
+                    now,
+                    streak,
+                ),
             )
-            cur.execute(
-                "SELECT fail_streak, last_reason FROM site_scrape_status WHERE site_code=%s",
-                (site_code,),
-            )
-            row = cur.fetchone() or {}
-            streak = int(row.get("fail_streak") or 0)
-            saved_reason = row.get("last_reason")
+            saved_reason = reason or prev.get("last_reason")
+    if ok:
+        reuse = None
+    elif had_prior_tips:
+        reuse = "same_period"
+    else:
+        reuse = "prior_period"
     return {
         "site_code": site_code,
         "fail_streak": streak,
         "reason": saved_reason,
         "alert": streak >= 3,
+        "counted": counted if not ok else False,
+        "reuse": reuse,
     }
 
 
@@ -225,7 +289,7 @@ def list_site_alerts() -> list[dict[str, Any]]:
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT site_code, fail_streak, last_reason, last_detail, updated_at
+            SELECT site_code, fail_streak, last_reason, last_detail, last_period, last_fail_period, updated_at
             FROM site_scrape_status
             WHERE fail_streak >= 3
             ORDER BY fail_streak DESC, site_code
@@ -616,7 +680,31 @@ def latest_recommend_period() -> int | None:
         return int(row["p"]) if row and row.get("p") is not None else None
 
 
+def expire_stale_scrape_runs(*, max_minutes: int = 30) -> int:
+    """把长时间仍是 running 的任务标成失败，避免占坑。"""
+    now = datetime.now()
+    cutoff = now - timedelta(minutes=max_minutes)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE scrape_run
+            SET status='failed',
+                message=%s,
+                finished_at=%s
+            WHERE status='running'
+              AND started_at < %s
+            """,
+            (
+                f"超时未结束（超过 {max_minutes} 分钟），已自动清理",
+                now,
+                cutoff,
+            ),
+        )
+        return int(cur.rowcount or 0)
+
+
 def start_scrape_run(job_type: str) -> int:
+    expire_stale_scrape_runs()
     with db_cursor() as cur:
         cur.execute(
             "INSERT INTO scrape_run (job_type, status, message) VALUES (%s, 'running', %s)",

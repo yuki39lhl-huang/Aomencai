@@ -98,9 +98,9 @@ TIP_SITES: tuple[TipSite, ...] = (
         code="s15043",
         name="15043.cc",
         entry_urls=("https://15043.cc/",),
-        enabled=True,
+        enabled=False,
         prefer_frames=True,
-        note="有线路匹配页，需进帧后再抽",
+        note="已禁用：连续 route_page，近月几乎无 tip；进帧后仍抽不到肖名单",
     ),
     TipSite(
         code="s19333",

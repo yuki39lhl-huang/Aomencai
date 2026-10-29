@@ -80,13 +80,15 @@ CREATE TABLE IF NOT EXISTS scrape_run (
 
 CREATE TABLE IF NOT EXISTS site_scrape_status (
   site_code VARCHAR(32) NOT NULL COMMENT '站点代号',
-  fail_streak INT NOT NULL DEFAULT 0 COMMENT '连续没抓到名单的次数',
+  fail_streak INT NOT NULL DEFAULT 0 COMMENT '连续没抓到名单的期数',
   last_reason VARCHAR(32) NULL COMMENT '最近一次失败原因：timeout/route_page/no_period/no_list/fetch_error',
   last_detail VARCHAR(300) NULL COMMENT '最近一次失败说明',
+  last_period INT NULL COMMENT '最近一次记录的期号',
+  last_fail_period INT NULL COMMENT '最近一次失败计入连击的期号',
   updated_at DATETIME NOT NULL COMMENT '最近更新时间',
   PRIMARY KEY (site_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  COMMENT='站点抓取成败。连续失败只用于面板告警，不改打分权重';
+  COMMENT='站点抓取成败。按期去重连击，只用于面板告警，不改打分权重';
 
 CREATE TABLE IF NOT EXISTS backtest_snapshot (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',

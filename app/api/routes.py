@@ -7,19 +7,20 @@ from pydantic import BaseModel
 from app.db import ping_db
 from app.jobs.pipeline import refresh_all
 from app.repositories import (
+    expire_stale_scrape_runs,
     get_draw,
     get_recommends_for_period,
     latest_draw,
     latest_backtest_snapshot,
     latest_scrape_run,
     list_draws,
+    list_draws_asc,
     list_site_alerts,
     update_recommend_hit,
 )
 from app.services.reconcile import hit_summary, reconcile_pending, site_weights_for_period
 from app.scrapers.tips import FAIL_REASON_LABEL
-from app.services.scoring import latest_recommendation, score_for_period
-from app.services.zodiac import lunar_year_for, year_zodiac
+from app.services.scoring import latest_recommendation, score_for_period, year_zodiac_for_period
 
 router = APIRouter(prefix="/api")
 
@@ -58,17 +59,39 @@ def latest_recommend_api():
         "site_weights": weights,
         "hits": hit_summary(limit=20),
         "backtest": latest_backtest_snapshot(),
-        "year_zodiac": year_zodiac(lunar_year_for(None)),
+        "year_zodiac": _panel_year_zodiac(rec, period),
         "site_alerts": [
             {
                 "site": row["site_code"],
                 "fail_streak": int(row["fail_streak"]),
                 "fail_reason": row.get("last_reason"),
-                "fail_label": FAIL_REASON_LABEL.get(row.get("last_reason") or "", row.get("last_reason")),
+                "fail_label": FAIL_REASON_LABEL.get(
+                    row.get("last_reason") or "", row.get("last_reason")
+                ),
+                "last_period": row.get("last_period"),
+                "reuse": (
+                    "same_period"
+                    if period is not None
+                    and row.get("last_period") is not None
+                    and int(row["last_period"]) == int(period)
+                    else "prior_period"
+                ),
             }
             for row in list_site_alerts()
         ],
     }
+
+
+def _panel_year_zodiac(rec: dict | None, period: int | None) -> str | None:
+    """面板年肖跟当期推荐详情或 year_zodiac_for_period，不用今天硬算。"""
+    if rec:
+        bao = rec.get("bao_xiao") or {}
+        detail = bao.get("score_detail") or {}
+        if isinstance(detail, dict) and detail.get("year_zodiac"):
+            return str(detail["year_zodiac"])
+    if period is None:
+        return None
+    return year_zodiac_for_period(int(period), list_draws_asc())
 
 
 class ManualHitBody(BaseModel):
@@ -126,6 +149,13 @@ def manual_hit(body: ManualHitBody):
 @router.post("/reconcile")
 def reconcile_api():
     return reconcile_pending()
+
+
+@router.post("/cleanup-scrape-runs")
+def cleanup_scrape_runs(max_minutes: int = 30):
+    """把卡住的 running 任务标成失败。刷新开始时也会自动做一次。"""
+    cleared = expire_stale_scrape_runs(max_minutes=max_minutes)
+    return {"ok": True, "expired": cleared, "max_minutes": max_minutes}
 
 
 @router.post("/refresh")

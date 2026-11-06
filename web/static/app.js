@@ -18,6 +18,7 @@ const FAIL_LABELS = {
   route_page: "线路页",
   no_period: "名单未出",
   no_list: "没有名单",
+  connection_closed: "连接断开",
   fetch_error: "抓取失败",
 };
 

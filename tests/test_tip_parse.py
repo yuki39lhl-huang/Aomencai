@@ -60,6 +60,14 @@ class TipParseTest(unittest.TestCase):
         self.assertEqual(classify_empty_page("296期 这里没有肖名单", 296), "no_list")
         self.assertEqual(classify_fetch_error(TimeoutError("timed out")), "timeout")
         self.assertEqual(classify_fetch_error(RuntimeError("boom")), "fetch_error")
+        self.assertEqual(
+            classify_fetch_error(RuntimeError("net::ERR_CONNECTION_CLOSED")),
+            "connection_closed",
+        )
+        self.assertEqual(
+            classify_fetch_error(OSError(10054, "远程主机强迫关闭了一个现有的连接。")),
+            "connection_closed",
+        )
 
 
 if __name__ == "__main__":

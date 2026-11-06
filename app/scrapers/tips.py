@@ -19,12 +19,29 @@ from app.sites import TipSite, all_tip_fetch_urls, enabled_tip_sites
 _SITE_SCRAPE_TIMEOUT_SEC = 75
 # 启用站大约 5 个；并行上限 5，整轮 tip 墙钟时间约等于最慢那一站（≤75s）
 _TIP_SCRAPE_CONCURRENCY = 5
+# 连接被对端掐断时短等再试一次，仍算在单站 75s 预算里
+_CONNECTION_RETRY_SLEEP_SEC = 3.0
+_CONNECTION_ERROR_MARKS = (
+    "err_connection_closed",
+    "connection_closed",
+    "connection closed",
+    "connection reset",
+    "connection aborted",
+    "econnreset",
+    "forcibly closed",
+    "强制关闭",
+    "强迫关闭",
+    "broken pipe",
+    "winerror 10054",
+    "10054",
+)
 
 FAIL_REASON_LABEL = {
     "timeout": "超时",
     "route_page": "线路页",
     "no_period": "名单未出",  # 当期期号尚未出现，常见于晚出，不按坏站处理
     "no_list": "没有名单",
+    "connection_closed": "连接断开",
     "fetch_error": "抓取失败",
 }
 _ROUTE_MARKS = ("点击进入", "进入网站", "立即进入", "线路选择", "选择线路")
@@ -189,7 +206,13 @@ def classify_fetch_error(exc: BaseException) -> str:
     blob = f"{type(exc).__name__} {exc}".lower()
     if "timeout" in blob or "timed out" in blob:
         return "timeout"
+    if any(mark in blob for mark in _CONNECTION_ERROR_MARKS):
+        return "connection_closed"
     return "fetch_error"
+
+
+def is_connection_fetch_error(exc: BaseException) -> bool:
+    return classify_fetch_error(exc) == "connection_closed"
 
 
 def extract_candidates(text: str, period: int) -> list[dict[str, Any]]:
@@ -288,6 +311,21 @@ async def _fetch_text(url: str, prefer_frames: bool) -> str:
     return text
 
 
+async def _fetch_text_retry_connection(url: str, prefer_frames: bool) -> tuple[str, bool]:
+    """普通抓取；若连接被掐断，短间隔后再试一次。返回 (正文, 是否已重试)。"""
+    try:
+        return await _fetch_text(url, prefer_frames), False
+    except Exception as first:
+        if not is_connection_fetch_error(first):
+            raise
+        await asyncio.sleep(_CONNECTION_RETRY_SLEEP_SEC)
+        try:
+            return await _fetch_text(url, prefer_frames), True
+        except Exception as second:
+            setattr(second, "_tip_connection_retried", True)
+            raise
+
+
 async def scrape_tip_site(
     period: int,
     site: TipSite,
@@ -310,10 +348,10 @@ async def scrape_tip_site(
         url = urls[i]
         i += 1
         try:
-            text = await _fetch_text(url, prefer)
+            text, connection_retried = await _fetch_text_retry_connection(url, prefer)
             candidates = extract_candidates(text, period)
             found, st = _rows_from_candidates(site.code, url, candidates, prior_seen)
-            used.append(url)
+            used.append(f"{url}#retried=1" if connection_retried else url)
             for s in st:
                 if s not in strategies_used:
                     strategies_used.append(s)
@@ -333,7 +371,9 @@ async def scrape_tip_site(
                         urls.append(e)
         except Exception as exc:
             error_reason = classify_fetch_error(exc)
-            error_detail = f"{type(exc).__name__}: {exc}"
+            retried = bool(getattr(exc, "_tip_connection_retried", False))
+            suffix = "; retried=1" if retried else ""
+            error_detail = f"{type(exc).__name__}: {exc}{suffix}"
             used.append(f"{url}#err:{error_detail}")
 
     if rows:

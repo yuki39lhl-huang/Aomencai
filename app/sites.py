@@ -64,13 +64,15 @@ TIP_SITES: tuple[TipSite, ...] = (
     TipSite(
         code="dinggeshui",
         name="定个水",
-        entry_urls=("https://www.dinggeshui.com/",),
+        # 首页 dinggeshui.com 是「四字成语解肖」，不是 N肖名单，不进抓取
+        entry_urls=(),
         tip_urls=(
             "https://333810.com/zl/%E4%B9%9D%E8%82%96.htm",
             "https://333810.com/",
         ),
         prefer_frames=True,
-        note="入口偶发连不上，直连 tip_urls 更稳",
+        max_extra_links=0,
+        note="只抓 333810 九肖直链再兜底首页；连接断开短重试一次。成语表不解析",
     ),
     TipSite(
         code="s3497",

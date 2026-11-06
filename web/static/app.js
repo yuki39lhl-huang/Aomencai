@@ -463,13 +463,16 @@ function renderBacktest(snapshot, errorText) {
   const tips = snapshot.tema_tips || {};
   const cons = snapshot.consensus;
   const consText = cons
-    ? ` 共识行只算包肖：资料只认至少 ${cons.min_sites} 个启用站同推的肖，有名单 ${cons.periods_with_tips} 期，` +
-      `有同推 ${cons.periods_agreed} 期；` +
+    ? ` 共识行只算包肖：至少 ${cons.min_sites} 站同推才加 tip，有名单 ${cons.periods_with_tips} 期，` +
+      `有同推 ${cons.periods_agreed} 期，无共识回退 ${cons.periods_fallback ?? "—"} 期；` +
       cons.variants
-        .map(
-          (v) =>
-            `热度 ${v.hot_weight} 时资料改动推荐 ${v.changed} 期（共识中 ${v.changed_hits}，不加资料中 ${v.changed_hits_without_tip}）`
-        )
+        .map((v) => {
+          const tipW = v.tip_weight == null ? "" : `·tip ${v.tip_weight}`;
+          return (
+            `热度 ${v.hot_weight}${tipW} 改动 ${v.changed} 期` +
+            `（共识中 ${v.changed_hits}，不加资料中 ${v.changed_hits_without_tip}）`
+          );
+        })
         .join("，") +
       "。"
     : "";

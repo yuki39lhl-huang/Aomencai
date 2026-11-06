@@ -29,10 +29,20 @@ from app.sites import enabled_tip_sites
 
 _START = 40
 _DRAW_CLOCK = time(21, 32)
-_RULE = "pre_draw_21_32_year_live"
-# 共识实验：热度权重两档；资料只认至少这么多个启用站同推的肖
-_CONSENSUS_HOT_WEIGHTS = {"consensus_h0": 0.0, "consensus_h05": 0.05}
+# 规则名带上共识 tip 扫描，刷新分析时会重算对照；不写 recommend_log
+_RULE = "pre_draw_21_32_consensus_tip_scan"
+# 共识实验：热度 0 / 0.05 × tip 0 / 0.1 / 0.15 / 0.2；资料只认至少这么多个启用站同推的肖
 _CONSENSUS_MIN_SITES = 2
+_CONSENSUS_VARIANTS: tuple[tuple[str, float, float, str], ...] = tuple(
+    (
+        f"consensus_h{str(hot).replace('.', '')}_t{str(tip).replace('.', '')}",
+        hot,
+        tip,
+        f"共识（热度 {hot} · tip {tip}）",
+    )
+    for hot in (0.0, 0.05)
+    for tip in (0.0, 0.1, 0.15, 0.2)
+)
 
 
 def _comb(n: int, k: int) -> int:
@@ -147,6 +157,7 @@ def _consensus_ranked(
     hot: dict[str, int],
     site_counts: dict[str, int],
     hot_weight: float,
+    tip_weight: float,
 ) -> list[str]:
     """遗漏照旧；热度按 hot_weight；资料分只给至少两站同推的肖，按同推站数归一。"""
     center = settings.bao_omit_center
@@ -155,9 +166,9 @@ def _consensus_ranked(
     agreed = {
         z: float(c) if c >= _CONSENSUS_MIN_SITES else 0.0 for z, c in site_counts.items()
     }
-    tip_n = _normalize(agreed)
+    tip_n = _normalize(agreed) if tip_weight > 0 else {z: 0.0 for z in ZODIAC_ORDER}
     totals = {
-        z: settings.weight_omit * omit_n[z] + hot_weight * hot_n[z] + settings.weight_tip * tip_n[z]
+        z: settings.weight_omit * omit_n[z] + hot_weight * hot_n[z] + tip_weight * tip_n[z]
         for z in ZODIAC_ORDER
     }
     return sorted(
@@ -240,17 +251,40 @@ def run_walkforward() -> dict[str, Any] | None:
     if len(draws) <= _START:
         return None
 
+    strategy_keys = (
+        "cold",
+        "gap",
+        "hot",
+        "current",
+        "year",
+        *(key for key, *_ in _CONSENSUS_VARIANTS),
+    )
     stats = {
-        name: {"tema": 0, "bao": 0, "bao_expected": 0.0, "n": 0}
-        for name in ("cold", "gap", "hot", "current", "year", *_CONSENSUS_HOT_WEIGHTS)
+        name: {
+            "tema": 0,
+            "bao": 0,
+            "bao_expected": 0.0,
+            "n": 0,
+            "tip_periods": 0,
+            "agreed_periods": 0,
+            "fallback_periods": 0,
+        }
+        for name in strategy_keys
     }
     enabled = {site.code for site in enabled_tip_sites()}
     consensus = {
         "periods_with_tips": 0,
         "periods_agreed": 0,
+        "periods_fallback": 0,
         "variants": {
-            key: {"changed": 0, "changed_hits": 0, "changed_hits_without_tip": 0}
-            for key in _CONSENSUS_HOT_WEIGHTS
+            key: {
+                "changed": 0,
+                "changed_hits": 0,
+                "changed_hits_without_tip": 0,
+                "hot_weight": hot_w,
+                "tip_weight": tip_w,
+            }
+            for key, hot_w, tip_w, _label in _CONSENSUS_VARIANTS
         },
     }
     this_year = lunar_year_for(None)
@@ -312,23 +346,42 @@ def run_walkforward() -> dict[str, Any] | None:
         }
         site_counts = _consensus_sites(bao_tips, enabled)
         no_sites = {z: 0 for z in ZODIAC_ORDER}
-        if any(site_counts.values()):
+        has_tip_sites = any(site_counts.values())
+        has_agreement = max(site_counts.values()) >= _CONSENSUS_MIN_SITES
+        if has_tip_sites:
             consensus["periods_with_tips"] += 1
-        if max(site_counts.values()) >= _CONSENSUS_MIN_SITES:
+        if has_agreement:
             consensus["periods_agreed"] += 1
-        for key, hot_weight in _CONSENSUS_HOT_WEIGHTS.items():
+        else:
+            consensus["periods_fallback"] += 1
+        for key, hot_weight, tip_weight, _label in _CONSENSUS_VARIANTS:
             pick = _consensus_ranked(
-                omit=omit_b, hot=hot_b, site_counts=site_counts, hot_weight=hot_weight
+                omit=omit_b,
+                hot=hot_b,
+                site_counts=site_counts,
+                hot_weight=hot_weight,
+                tip_weight=tip_weight,
             )[0]
             plain = _consensus_ranked(
-                omit=omit_b, hot=hot_b, site_counts=no_sites, hot_weight=hot_weight
+                omit=omit_b,
+                hot=hot_b,
+                site_counts=no_sites,
+                hot_weight=hot_weight,
+                tip_weight=tip_weight,
             )[0]
             picks[key] = (None, pick)
+            if has_agreement:
+                stats[key]["agreed_periods"] += 1
+                stats[key]["tip_periods"] += 1
+            else:
+                stats[key]["fallback_periods"] += 1
             if pick != plain:
                 variant = consensus["variants"][key]
                 variant["changed"] += 1
                 variant["changed_hits"] += int(bao_xiao_hit(pick, row))
                 variant["changed_hits_without_tip"] += int(bao_xiao_hit(plain, row))
+        if bao_tips:
+            stats["current"]["tip_periods"] += 1
 
         draw_year = lunar_year_for(row.get("draw_date"))
         anchor = year_zodiac(draw_year)
@@ -397,12 +450,13 @@ def run_walkforward() -> dict[str, Any] | None:
         ("cold", "追最冷"),
         ("gap", "靠近典型间隔"),
         ("hot", "只看热度"),
-        ("current", "旧公式"),
+        ("current", "现行公式"),
         ("year", "永远当年肖"),
-        ("consensus_h0", "共识（热度 0）"),
-        ("consensus_h05", "共识（热度 0.05）"),
+        *((key, label) for key, _h, _t, label in _CONSENSUS_VARIANTS),
     )
     tema_keys = {"cold", "gap", "hot", "current"}
+    current_bao = int(stats["current"]["bao"])
+    current_tema = int(stats["current"]["tema"])
     if tema_tip_n and tema_tip_hit <= tema_tip_base * 1.15:
         tip_note = "特码资料没有明显高于名单长度 / 12，权重保持 0。"
         keep_zero = True
@@ -414,10 +468,32 @@ def run_walkforward() -> dict[str, Any] | None:
         keep_zero = True
     tip_note += (
         f" 包肖资料只采用第一次抓到时间早于开奖 21:32 的名单：用了 {bao_used} 条，"
-        f"来不及证明的 {bao_skipped} 条没有进入旧公式。"
+        f"来不及证明的 {bao_skipped} 条没有进入现行公式。"
     )
     if tema_skipped:
         tip_note += f" 特码对照同样去掉来不及证明的 {tema_skipped} 条。"
+
+    rows = []
+    for key, label in labels:
+        bao_hits = int(stats[key]["bao"])
+        tema_hits = int(stats[key]["tema"]) if key in tema_keys else None
+        row = {
+            "key": key,
+            "label": label,
+            "tema_hits": tema_hits,
+            "bao_hits": bao_hits,
+            "bao_expected": round(stats[key]["bao_expected"], 1),
+            "n": stats[key]["n"],
+            "tip_periods": int(stats[key]["tip_periods"]),
+            "bao_delta_vs_current": bao_hits - current_bao,
+            "tema_delta_vs_current": (
+                None if tema_hits is None else tema_hits - current_tema
+            ),
+        }
+        if key.startswith("consensus_"):
+            row["agreed_periods"] = int(stats[key]["agreed_periods"])
+            row["fallback_periods"] = int(stats[key]["fallback_periods"])
+        rows.append(row)
 
     return {
         "rule": _RULE,
@@ -426,24 +502,15 @@ def run_walkforward() -> dict[str, Any] | None:
         "n": n,
         "tema_baseline": 0.083,
         "bao_baseline": round(single_bao, 4),
-        "rows": [
-            {
-                "key": key,
-                "label": label,
-                "tema_hits": stats[key]["tema"] if key in tema_keys else None,
-                "bao_hits": stats[key]["bao"],
-                "bao_expected": round(stats[key]["bao_expected"], 1),
-                "n": stats[key]["n"],
-            }
-            for key, label in labels
-        ],
+        "rows": rows,
         "consensus": {
             "min_sites": _CONSENSUS_MIN_SITES,
             "periods_with_tips": consensus["periods_with_tips"],
             "periods_agreed": consensus["periods_agreed"],
+            "periods_fallback": consensus["periods_fallback"],
             "variants": [
-                {"key": key, "hot_weight": weight, **consensus["variants"][key]}
-                for key, weight in _CONSENSUS_HOT_WEIGHTS.items()
+                {"key": key, "label": label, **consensus["variants"][key]}
+                for key, _hot, _tip, label in _CONSENSUS_VARIANTS
             ],
         },
         "lian": [

@@ -1,6 +1,7 @@
-"""命令行打印滚动回测。平时不用跑：新开奖写入后，刷新分析会自动更新页面上的对照。"""
+"""命令行打印滚动回测。只写对照结果，不写 recommend_log。"""
 from __future__ import annotations
 
+from app.repositories import save_backtest_snapshot
 from app.services.walkforward import run_walkforward
 
 
@@ -10,36 +11,49 @@ def _rate(hits: int | None, total: int) -> str:
     return f"{hits}/{total}={hits / total:.1%}"
 
 
+def _pct_points(delta: int | None, total: int) -> str:
+    if delta is None or total <= 0:
+        return "—"
+    return f"{delta:+d}（{delta / total * 100:+.1f}pt）"
+
+
 def main() -> None:
     snapshot = run_walkforward()
     if not snapshot:
         print("开奖期数不够")
         return
+    save_backtest_snapshot(int(snapshot["through_period"]), snapshot)
     bao_base = float(snapshot["bao_baseline"])
+    n = int(snapshot["n"])
     print(
         f"滚动回测 {snapshot['from_period']}–{snapshot['through_period']}，"
-        f"共 {snapshot['n']} 期。预测时只用更早开奖。"
+        f"共 {n} 期。预测时只用更早开奖。规则 {snapshot['rule']}"
     )
     print(f"随机一肖基准：特码 8.3%，包肖 {bao_base:.1%}")
+    print()
+    print("策略 | 用上 tip 期数 | 特码 | 包肖 | 相对现行包肖 | 相对现行特码")
     for row in snapshot["rows"]:
-        n = int(row["n"])
-        tema = row["tema_hits"]
+        tip_n = row.get("tip_periods", 0)
         print(
-            f"{row['label']} | 特码 {_rate(tema, n)}{'（基准 8.3%）' if tema is not None else ''}"
-            f" | 包肖 {_rate(int(row['bao_hits']), n)}（随机基准 {bao_base:.1%}）"
-            f" | 号码先验 {row.get('bao_expected', '—')} 次"
+            f"{row['label']} | tip期 {tip_n} | 特码 {_rate(row['tema_hits'], n)}"
+            f" | 包肖 {_rate(int(row['bao_hits']), n)}"
+            f"（先验 {row.get('bao_expected', '—')}）"
+            f" | 包肖差 {_pct_points(row.get('bao_delta_vs_current'), n)}"
+            f" | 特码差 {_pct_points(row.get('tema_delta_vs_current'), n)}"
         )
-    cons = snapshot.get("consensus")
+    cons = snapshot.get("consensus") or {}
     if cons:
         print()
         print(
-            f"共识资料：开奖前有启用站包肖名单的 {cons['periods_with_tips']} 期，"
-            f"其中至少 {cons['min_sites']} 站同推某肖的 {cons['periods_agreed']} 期"
+            f"共识：开奖前有启用站包肖名单 {cons.get('periods_with_tips')} 期；"
+            f"至少 {cons.get('min_sites')} 站同推 {cons.get('periods_agreed')} 期；"
+            f"无共识回退 {cons.get('periods_fallback')} 期"
         )
-        for item in cons["variants"]:
+        for item in cons.get("variants") or []:
             print(
-                f"  热度 {item['hot_weight']}：资料改动了推荐的 {item['changed']} 期，"
-                f"这些期共识中 {item['changed_hits']} 次，不加资料中 {item['changed_hits_without_tip']} 次"
+                f"  {item.get('label') or item['key']}："
+                f"资料改动推荐 {item['changed']} 期，"
+                f"这些期共识中 {item['changed_hits']}、无 tip 中 {item['changed_hits_without_tip']}"
             )
     for item in snapshot.get("lian") or []:
         print(
@@ -50,13 +64,6 @@ def main() -> None:
     if prior.get("note"):
         print()
         print(prior["note"])
-    for item in prior.get("by_year") or []:
-        print(
-            f"  {item['year']}{item['zodiac']} {item['n']} 期 | "
-            f"单肖现行 {item['current_bao']} / 永远当年肖 {item['year_bao']} | "
-            f"三连现行 {item['current_lian3']} / 锁当年 {item['year_lian3']} | "
-            f"五连现行 {item['current_lian5']} / 锁当年 {item['year_lian5']}"
-        )
     tips = snapshot["tema_tips"]
     print()
     print(f"特码资料（一肖到三肖，有名单的记录 {tips['records']} 条）")
@@ -67,12 +74,9 @@ def main() -> None:
             f"覆盖 {hits}/{records}={hits / records:.1%}，"
             f"按名单长度/12 的期望 {tips['expected_hits']} 次"
         )
-        for item in tips["by_count"]:
-            count = int(item["count"])
-            hit = int(item["hits"])
-            total = int(item["n"])
-            print(f"  {count}肖 {hit}/{total}={hit / total:.1%}，基准 {count / 12:.1%}")
     print(tips["note"])
+    print()
+    print(f"已写入 backtest_snapshot through_period={snapshot['through_period']}")
 
 
 if __name__ == "__main__":

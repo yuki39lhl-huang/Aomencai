@@ -88,6 +88,38 @@ def main() -> None:
                 f"极低权加分({kill.get('boost_weight')}) {_rate(kill.get('kill_boost_hits'), kn)}"
             )
         print(kill.get("note") or "")
+    order = snapshot.get("lian_order") or {}
+    if order:
+        print()
+        print("连肖位次对照（年肖固定第一，只改 2–5 名；不写推荐）")
+        for item in order.get("variants") or []:
+            print(
+                f"  {item['label']} | 样本 {item['n']} | "
+                f"三连 {_rate(item['lian3_hits'], item['n'])} "
+                f"差 {_pct_points(item['lian3_delta'], item['n'])} | "
+                f"五连 {_rate(item['lian5_hits'], item['n'])} "
+                f"差 {_pct_points(item['lian5_delta'], item['n'])} | "
+                f"名单不同 三连 {item['diff3']} 期 / 五连 {item['diff5']} 期"
+            )
+        spot = order.get("spotlight") or {}
+        period = order.get("spotlight_period")
+        if spot:
+            print(f"  第 {period} 期名单：")
+            for item in order.get("variants") or []:
+                row = spot.get(item["key"]) or {}
+                changed = []
+                if row.get("lian3_changed"):
+                    changed.append("三连变")
+                if row.get("lian5_changed"):
+                    changed.append("五连变")
+                mark = "、".join(changed) if changed else "与现行相同"
+                print(
+                    f"    {item['label']} 三连 {row.get('lian3')} 五连 {row.get('lian5')}（{mark}）"
+                )
+        elif period:
+            print(f"  第 {period} 期不在本次样本里。")
+        print(order.get("note") or "")
+        print(f"  建议进线上：{'是' if order.get('adopt_online') else '否'}")
     print()
     print(f"已写入 backtest_snapshot through_period={snapshot['through_period']}")
 

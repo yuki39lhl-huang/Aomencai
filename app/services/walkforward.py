@@ -29,8 +29,18 @@ from app.sites import enabled_tip_sites
 
 _START = 40
 _DRAW_CLOCK = time(21, 32)
-# 规则名带上共识 tip 扫描，刷新分析时会重算对照；不写 recommend_log
-_RULE = "pre_draw_21_32_consensus_tip_scan_v2"
+# 规则名带上连肖位次扫描，刷新分析时会重算对照；不写 recommend_log
+_RULE = "pre_draw_21_32_lian_order_scan_v1"
+# 连肖第 2–5 名对照。年肖永远第一。tip 权重只在这里试，不改 settings。
+_LIAN_ORDER_VARIANTS: tuple[tuple[str, str], ...] = (
+    ("current", "现行：年肖第一，2–5 综合分"),
+    ("tip_heavy_025", "2–5 资料加重 tip=0.25"),
+    ("tip_heavy_035", "2–5 资料加重 tip=0.35"),
+    ("tip_only_rest", "2–5 只按包肖资料分"),
+    ("soft_omit", "2–5 减轻遗漏=0 惩罚"),
+    ("consensus_rest", "2–5 优先 ≥2 站同推"),
+)
+_LIAN_SPOTLIGHT_PERIOD = 310
 # 共识实验：热度 0 / 0.05 × tip 0 / 0.1 / 0.15 / 0.2；资料只认至少这么多个启用站同推的肖
 _CONSENSUS_MIN_SITES = 2
 _CONSENSUS_VARIANTS: tuple[tuple[str, float, float, str], ...] = tuple(
@@ -180,8 +190,144 @@ def _consensus_ranked(
 
 def _lock_year(ranked: list[str], anchor: str, size: int) -> list[str]:
     """当年肖（5 个号）固定在组里，其余名额按现行排名往下取。"""
+    return _year_first(ranked, anchor)[:size]
+
+
+def _year_first(ranked: list[str], anchor: str) -> list[str]:
+    """当年肖固定第一，其余保持原相对顺序。"""
     others = [zodiac for zodiac in ranked if zodiac != anchor]
-    return [anchor, *others[: size - 1]]
+    return [anchor, *others]
+
+
+def _soft_omit_component(
+    values: dict[str, int], *, center: int, half_width: int
+) -> dict[str, float]:
+    """连肖对照专用：遗漏为 0 时按「中心的一半」计距离，减轻刚开出的惩罚。
+
+    不改 scoring._gap_component，特码线上仍用原来的遗漏分量。
+    """
+    if not values or half_width <= 0:
+        return {k: 0.0 for k in values}
+    softened = float(center) / 2.0
+    out: dict[str, float] = {}
+    for key, value in values.items():
+        used = softened if int(value) == 0 else float(value)
+        dist = abs(used - center) / half_width
+        out[key] = 1.0 / (1.0 + dist)
+    return out
+
+
+def _weighted_bao_rank(
+    *,
+    omit: dict[str, int],
+    hot: dict[str, int],
+    tip_raw: dict[str, float],
+    omit_weight: float,
+    hot_weight: float,
+    tip_weight: float,
+    soft_omit: bool = False,
+) -> list[str]:
+    """包肖 12 肖排序，只给连肖位次对照用。不写推荐，不改 settings。"""
+    center = settings.bao_omit_center
+    half = settings.bao_omit_half
+    if soft_omit:
+        omit_n = _soft_omit_component(omit, center=center, half_width=half)
+    else:
+        omit_n = _gap_component(omit, center=center, half_width=half)
+    if hot_weight > 0:
+        hot_n = _scaled_component(
+            hot, min_lead=settings.score_min_lead, full_at=settings.hot_window
+        )
+    else:
+        hot_n = {z: 0.0 for z in ZODIAC_ORDER}
+    tip_n = _normalize(tip_raw) if tip_weight > 0 else {z: 0.0 for z in ZODIAC_ORDER}
+    totals = {
+        z: omit_weight * omit_n[z] + hot_weight * hot_n[z] + tip_weight * tip_n[z]
+        for z in ZODIAC_ORDER
+    }
+    return sorted(
+        ZODIAC_ORDER,
+        key=lambda z: (totals[z], -abs(omit[z] - center), -ZODIAC_ORDER.index(z)),
+        reverse=True,
+    )
+
+
+def _consensus_rest_order(
+    anchor: str, formula_ranked: list[str], site_counts: dict[str, int]
+) -> list[str]:
+    """年肖第一；其余里至少两站同推的肖按站数提前，剩下仍按现行综合分。"""
+    base = [zodiac for zodiac in formula_ranked if zodiac != anchor]
+    agreed = [zodiac for zodiac in base if site_counts.get(zodiac, 0) >= _CONSENSUS_MIN_SITES]
+    agreed.sort(key=lambda zodiac: (-site_counts.get(zodiac, 0), base.index(zodiac)))
+    picked = set(agreed)
+    rest = [zodiac for zodiac in base if zodiac not in picked]
+    return [anchor, *agreed, *rest]
+
+
+def _lian_order_variants(
+    *,
+    anchor: str,
+    formula_ranked: list[str],
+    omit: dict[str, int],
+    hot: dict[str, int],
+    tip_raw: dict[str, float],
+    site_counts: dict[str, int],
+) -> dict[str, list[str]]:
+    """年肖锁第一之后的连肖全序。current 与线上锁当年肖的取法一致。"""
+    current = _year_first(formula_ranked, anchor)
+    tip_025 = _year_first(
+        _weighted_bao_rank(
+            omit=omit,
+            hot=hot,
+            tip_raw=tip_raw,
+            omit_weight=settings.weight_omit,
+            hot_weight=settings.weight_hot,
+            tip_weight=0.25,
+        ),
+        anchor,
+    )
+    tip_035 = _year_first(
+        _weighted_bao_rank(
+            omit=omit,
+            hot=hot,
+            tip_raw=tip_raw,
+            omit_weight=settings.weight_omit,
+            hot_weight=settings.weight_hot,
+            tip_weight=0.35,
+        ),
+        anchor,
+    )
+    tip_only = _year_first(
+        _weighted_bao_rank(
+            omit=omit,
+            hot=hot,
+            tip_raw=tip_raw,
+            omit_weight=0.0,
+            hot_weight=0.0,
+            tip_weight=1.0,
+        ),
+        anchor,
+    )
+    soft = _year_first(
+        _weighted_bao_rank(
+            omit=omit,
+            hot=hot,
+            tip_raw=tip_raw,
+            omit_weight=settings.weight_omit,
+            hot_weight=settings.weight_hot,
+            tip_weight=settings.weight_tip,
+            soft_omit=True,
+        ),
+        anchor,
+    )
+    return {
+        "current": current,
+        "tip_heavy_025": tip_025,
+        "tip_heavy_035": tip_035,
+        "tip_only_rest": tip_only,
+        "soft_omit": soft,
+        "consensus_rest": _consensus_rest_order(anchor, formula_ranked, site_counts),
+    }
 
 
 def _all_hit(group: list[str], row: dict[str, Any]) -> int:
@@ -238,6 +384,59 @@ def _year_prior_note(by_year: list[dict[str, Any]], override: dict[str, dict[str
         )
     parts.append("分年的格子只用来看旧公式有没有高出当年肖，不拿去改回旧公式。")
     return "".join(parts)
+
+
+def _lian_order_snapshot(
+    stats: dict[str, dict[str, int]], n: int, spotlight: dict[str, Any] | None
+) -> dict[str, Any]:
+    """连肖 2–5 名对照。命中差不到 2 个百分点就当噪声，不换线上。"""
+    base3 = int(stats["current"]["lian3"])
+    base5 = int(stats["current"]["lian5"])
+    variants = []
+    both_clear = False
+    for key, label in _LIAN_ORDER_VARIANTS:
+        item = stats[key]
+        d3 = int(item["lian3"]) - base3
+        d5 = int(item["lian5"]) - base5
+        pt3 = (d3 / n * 100) if n else 0.0
+        pt5 = (d5 / n * 100) if n else 0.0
+        if key != "current" and pt3 >= 2 and pt5 >= 2:
+            both_clear = True
+        variants.append(
+            {
+                "key": key,
+                "label": label,
+                "n": n,
+                "lian3_hits": int(item["lian3"]),
+                "lian5_hits": int(item["lian5"]),
+                "lian3_delta": d3,
+                "lian5_delta": d5,
+                "lian3_pt": round(pt3, 1),
+                "lian5_pt": round(pt5, 1),
+                "diff3": int(item["diff3"]),
+                "diff5": int(item["diff5"]),
+            }
+        )
+    if n < 30:
+        note = f"连肖位次样本 {n} 期，不足 30，当噪声，不换线上。"
+        adopt = False
+    elif both_clear:
+        note = "有变体三连和五连都高出现行至少 2 个百分点，仍不自动改推荐，只留对照。"
+        adopt = False
+    else:
+        note = "相对现行「年肖第一 + 综合分排 2–5」，三连和五连没有同时高出 2 个百分点，当噪声，不换线上。"
+        adopt = False
+    note += (
+        " 年肖仍固定第一。soft_omit 只改这张对照里的遗漏分量（遗漏=0 按中心的一半计距离），"
+        "不改 scoring 的遗漏函数，也不改特码线上排序。不写 recommend_log。"
+    )
+    return {
+        "adopt_online": adopt,
+        "spotlight_period": _LIAN_SPOTLIGHT_PERIOD,
+        "spotlight": spotlight,
+        "variants": variants,
+        "note": note,
+    }
 
 
 def _parse_moment(value: Any) -> datetime | None:
@@ -341,6 +540,11 @@ def run_walkforward() -> dict[str, Any] | None:
         kind: {size: {"hits": 0, "expected": 0.0} for size in (3, 5)}
         for kind in ("current", "year")
     }
+    lian_order = {
+        key: {"lian3": 0, "lian5": 0, "diff3": 0, "diff5": 0}
+        for key, _label in _LIAN_ORDER_VARIANTS
+    }
+    lian_spotlight: dict[str, Any] | None = None
     by_year: dict[int, dict[str, Any]] = {}
     override = {
         key: {"changed": 0, "current_hits": 0, "year_hits": 0}
@@ -480,6 +684,32 @@ def run_walkforward() -> dict[str, Any] | None:
                 override[play]["changed"] += 1
                 override[play]["current_hits"] += current_hit
                 override[play]["year_hits"] += year_hit
+        orders = _lian_order_variants(
+            anchor=anchor,
+            formula_ranked=bao_ranked,
+            omit=omit_b,
+            hot=hot_b,
+            tip_raw=tip_raw,
+            site_counts=site_counts,
+        )
+        current_order = orders["current"]
+        if period == _LIAN_SPOTLIGHT_PERIOD:
+            lian_spotlight = {
+                key: {
+                    "lian3": order[:3],
+                    "lian5": order[:5],
+                    "lian3_changed": order[:3] != current_order[:3],
+                    "lian5_changed": order[:5] != current_order[:5],
+                }
+                for key, order in orders.items()
+            }
+        for key, order in orders.items():
+            lian_order[key]["lian3"] += _all_hit(order[:3], row)
+            lian_order[key]["lian5"] += _all_hit(order[:5], row)
+            if order[:3] != current_order[:3]:
+                lian_order[key]["diff3"] += 1
+            if order[:5] != current_order[:5]:
+                lian_order[key]["diff5"] += 1
         for name, (tema_z, bao_z) in picks.items():
             stats[name]["n"] += 1
             stats[name]["bao_expected"] += bao_cover_rate([bao_z], draw_year)
@@ -605,6 +835,7 @@ def run_walkforward() -> dict[str, Any] | None:
                 "不写 recommend_log，线上特码权重仍为 0。"
             ),
         },
+        "lian_order": _lian_order_snapshot(lian_order, n, lian_spotlight),
     }
 
 
@@ -619,6 +850,7 @@ def refresh_backtest_if_needed(latest_drawn_period: int) -> dict[str, Any]:
         and "consensus" in current
         and "year_prior" in current
         and "tema_kill" in current
+        and "lian_order" in current
     )
     if same_period and same_rule and complete:
         return {"updated": False, "snapshot": current}

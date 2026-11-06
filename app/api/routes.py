@@ -159,7 +159,8 @@ def cleanup_scrape_runs(max_minutes: int = 30):
 
 
 @router.post("/refresh")
-async def refresh(full_history: bool = True):
+async def refresh(full_history: bool = False):
+    """日常刷新默认不重拉全年历史。开奖前 21:00–21:20 再刷可补晚出 tip。"""
     try:
         result = await refresh_all(full_history=full_history)
         return result

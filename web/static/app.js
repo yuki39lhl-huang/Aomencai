@@ -16,7 +16,7 @@ function setStatus(text, isErr) {
 const FAIL_LABELS = {
   timeout: "超时",
   route_page: "线路页",
-  no_period: "无期号",
+  no_period: "名单未出",
   no_list: "没有名单",
   fetch_error: "抓取失败",
 };
@@ -152,7 +152,17 @@ function renderHits(payload) {
   const cell = (item, many) => {
     if (!item) return '<span class="muted">—</span>';
     const names = many ? (item.zodiacs || [item.zodiac]).join(" ") : item.zodiac;
-    return `${escapeHTML(names)} ${hitTag(item.hit)}`;
+    let extra = "";
+    if (many && item.need_count && item.hit !== null && item.hit !== undefined) {
+      const miss =
+        item.missing && item.missing.length
+          ? ` · 缺${item.missing.join("")}`
+          : item.hit
+            ? " · 全中"
+            : "";
+      extra = ` <span class="muted">${item.hit_count || 0}/${item.need_count}${miss}</span>`;
+    }
+    return `${escapeHTML(names)} ${hitTag(item.hit)}${extra}`;
   };
   body.innerHTML = rows.length
     ? rows
@@ -295,10 +305,12 @@ function renderRefreshTip(rec, draw) {
     text = "今晚 21:32 开奖。网站资料多在开奖前一小时内更新，建议 21:00–21:20 再刷新一次。";
   } else if (now < todayAt(21, 32)) {
     if (created && created >= todayAt(21, 0)) {
-      text = "本期已在开奖前刷新过，按这组推荐即可。";
+      text =
+        "本期已在开奖前刷新过。21:20 前还可再刷一轮，补齐晚出的站点名单（没抓到的站仍沿用上次）。";
       tone = "ok";
     } else {
-      text = "现在是建议刷新时段，点「刷新分析」更新本期推荐。";
+      text =
+        "现在是建议刷新时段（21:00–21:20），点「刷新分析」定推荐；晚出名单可在这个窗口内再刷补齐。";
       tone = "warn";
     }
   } else {
@@ -369,11 +381,13 @@ function renderSiteAlerts(alerts) {
         .map((item) => {
           const name = SITE_NAMES[item.site] || item.name || item.site;
           const reason = item.fail_label || FAIL_LABELS[item.fail_reason] || "抓取失败";
+          const softLate = item.fail_reason === "no_period" || item.fail_reason === "no_list";
           const reuse =
             item.reuse === "same_period"
               ? "同期间沿用上次名单"
               : "新年号尚无名单可沿用";
-          return `${name} 连续 ${item.fail_streak} 期没抓到（${reason}），${reuse}`;
+          const lateHint = softLate ? "，多半是晚出，21:00–21:20 再刷可补" : "";
+          return `${name} 连续 ${item.fail_streak} 期没抓到（${reason}），${reuse}${lateHint}`;
         })
         .join("；")
     : "";
@@ -490,12 +504,28 @@ async function loadPanel() {
   renderDraws(draws.items);
 }
 
+function tipAlertSummary(tips) {
+  const alerts = (tips && tips.alerts) || [];
+  if (!alerts.length) return "";
+  return (
+    " · 资料站告警：" +
+    alerts
+      .map((item) => {
+        const name = SITE_NAMES[item.site] || item.name || item.site;
+        const reason = item.fail_label || FAIL_LABELS[item.fail_reason] || "抓取失败";
+        return `${name}${reason}×${item.fail_streak}`;
+      })
+      .join("、")
+  );
+}
+
 async function doRefresh() {
   const btn = document.getElementById("btnRefresh");
   btn.disabled = true;
-  setStatus("正在抓取并分析，可能需要 30–90 秒…");
+  setStatus("正在并行抓站并分析，大约 1–2 分钟…");
   try {
-    const result = await fetchJSON("/api/refresh?full_history=true", { method: "POST" });
+    // 日常刷新不重拉全年历史；live + 资料并行即可。全量用命令行 bootstrap。
+    const result = await fetchJSON("/api/refresh?full_history=false", { method: "POST" });
     const bao = result.recommend.bao_xiao.zodiac;
     const tema = result.recommend.te_ma.zodiac;
     const lian3 = groupZodiacs(result.recommend.lian3).join("");
@@ -503,9 +533,14 @@ async function doRefresh() {
     if (result.backtest_error) notes.push(`公式对照没更新：${result.backtest_error}`);
     if (result.live_error) notes.push("实时开奖暂时无效，已用库里的开奖继续");
     if (result.history_error || result.history_light_error) notes.push("历史页暂时连不上");
+    const tipAlert = tipAlertSummary(result.tips);
+    const kept = ((result.tips && result.tips.kept_sites) || []).length;
+    if (kept) notes.push(`${kept} 站本次未抓到，沿用上次名单`);
     const extra = notes.length ? `（${notes.join("；")}）` : "";
     const lianText = lian3 ? ` / 三连肖「${lian3}」` : "";
-    setStatus(`完成：${result.recommend.period}期 单肖「${bao}」${lianText} / 特码「${tema}」${extra}`);
+    setStatus(
+      `完成：${result.recommend.period}期 单肖「${bao}」${lianText} / 特码「${tema}」${extra}${tipAlert}`
+    );
     await loadPanel();
   } catch (err) {
     setStatus(String(err.message || err), true);

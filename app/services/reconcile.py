@@ -175,6 +175,22 @@ def site_weights_for_period(
     return out
 
 
+def _lian_progress(zodiacs: list[str] | None, draw: dict[str, Any] | None) -> dict[str, Any] | None:
+    """连肖对账展示：开出几只、缺哪只。全中规则不变，只多返回展示字段。"""
+    if not zodiacs or not draw or draw.get("special") is None:
+        return None
+    from app.services.zodiac import bao_xiao_hit
+
+    present = [z for z in zodiacs if bao_xiao_hit(z, draw)]
+    missing = [z for z in zodiacs if z not in present]
+    return {
+        "hit_count": len(present),
+        "need_count": len(zodiacs),
+        "present": present,
+        "missing": missing,
+    }
+
+
 def hit_summary(limit: int = 16) -> dict[str, Any]:
     """最近 limit 期的推荐与战绩。各玩法各记各的。"""
     from app.repositories import list_recent_recommend_hits
@@ -195,14 +211,28 @@ def hit_summary(limit: int = 16) -> dict[str, Any]:
                 by_play[play]["hit"] += 1
             else:
                 by_play[play]["miss"] += 1
-        items.append(
-            {
-                "period": r["period"],
-                "play_type": play,
-                "zodiac": r["zodiac"],
-                "zodiacs": r.get("zodiacs"),
-                "hit": None if hit is None else bool(int(hit)),
+        item: dict[str, Any] = {
+            "period": r["period"],
+            "play_type": play,
+            "zodiac": r["zodiac"],
+            "zodiacs": r.get("zodiacs"),
+            "hit": None if hit is None else bool(int(hit)),
+            "special_zodiac": r.get("special_zodiac"),
+        }
+        if play in ("lian3", "lian5") and r.get("special") is not None:
+            draw = {
+                "n1": r.get("n1"),
+                "n2": r.get("n2"),
+                "n3": r.get("n3"),
+                "n4": r.get("n4"),
+                "n5": r.get("n5"),
+                "n6": r.get("n6"),
+                "special": r.get("special"),
                 "special_zodiac": r.get("special_zodiac"),
+                "draw_date": r.get("draw_date"),
             }
-        )
+            progress = _lian_progress(r.get("zodiacs"), draw)
+            if progress:
+                item.update(progress)
+        items.append(item)
     return {"by_play": by_play, "items": items}

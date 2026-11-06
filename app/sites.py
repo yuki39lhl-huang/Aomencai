@@ -21,6 +21,8 @@ class TipSite:
     tip_urls: tuple[str, ...] = ()
     enabled: bool = True
     prefer_frames: bool = False
+    # 主 URL 抽不到时再翻页内资料链；0 = 不翻，避免慢站把 75s 吃光
+    max_extra_links: int = 3
     note: str = ""
 
 
@@ -92,7 +94,8 @@ TIP_SITES: tuple[TipSite, ...] = (
         entry_urls=("https://10-3.www772200a.com:8443/#111",),
         enabled=True,
         prefer_frames=True,
-        note="王中王论坛入口，替代原 772200.com 首页",
+        max_extra_links=0,
+        note="王中王论坛入口；页面重，不翻子链，避免单站超时",
     ),
     TipSite(
         code="s15043",
@@ -124,7 +127,8 @@ TIP_SITES: tuple[TipSite, ...] = (
         entry_urls=("https://42054.com/", "http://42054.com/"),
         enabled=True,
         prefer_frames=True,
-        note="会跳到 ogiwz 镜像域",
+        max_extra_links=2,
+        note="会跳 ogiwz；名单常晚出，开奖前 21:00–21:20 再刷可补。无期号/无名单告警门槛更高",
     ),
 )
 

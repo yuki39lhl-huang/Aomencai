@@ -17,11 +17,13 @@ from app.sites import TipSite, all_tip_fetch_urls, enabled_tip_sites
 
 # 单站抓取上限，避免某一站线路页把整次开奖前刷新拖死
 _SITE_SCRAPE_TIMEOUT_SEC = 75
+# 启用站大约 5 个；并行上限 5，整轮 tip 墙钟时间约等于最慢那一站（≤75s）
+_TIP_SCRAPE_CONCURRENCY = 5
 
 FAIL_REASON_LABEL = {
     "timeout": "超时",
     "route_page": "线路页",
-    "no_period": "无期号",
+    "no_period": "名单未出",  # 当期期号尚未出现，常见于晚出，不按坏站处理
     "no_list": "没有名单",
     "fetch_error": "抓取失败",
 }
@@ -320,12 +322,12 @@ async def scrape_tip_site(
                 empty_reason = None
                 break
             empty_reason = classify_empty_page(text, period)
-            # 主 URL 抽不到：发现子链接换源再比
-            if not tried_extra:
+            # 主 URL 抽不到：按站点上限翻资料链；0 表示不翻（慢站保超时预算）
+            if not tried_extra and site.max_extra_links > 0:
                 tried_extra = True
                 from app.scrapers.browser import discover_tip_links
 
-                extras = await discover_tip_links(url, limit=6)
+                extras = await discover_tip_links(url, limit=site.max_extra_links)
                 for e in extras:
                     if e not in urls:
                         urls.append(e)
@@ -353,23 +355,21 @@ async def scrape_tip_site(
     }
 
 
-async def sync_tips(period: int) -> dict[str, Any]:
-    """全部站抓完后再替换。这次没抓到名单的站保留上次的名单，避免一次超时让分数跳动。
-
-    单站超时只记该站失败，不中断其余站，开奖前 21:00–21:20 再刷也能补齐。
-    """
-    prior_seen = list_tip_first_seen(period)
-    prior_sites = {str(tip.get("site_code") or "") for tip in list_tips(period)}
-    results: dict[str, Any] = {"period": period, "sites": []}
-    fresh: dict[str, list[dict[str, Any]]] = {}
-    for site in enabled_tip_sites():
+async def _scrape_site_bounded(
+    period: int,
+    site: TipSite,
+    prior_seen: dict[tuple[str, str, str, tuple[str, ...]], datetime],
+    sem: asyncio.Semaphore,
+) -> dict[str, Any]:
+    """单站限时抓取；并发由 semaphore 卡住上限。"""
+    async with sem:
         try:
-            item = await asyncio.wait_for(
+            return await asyncio.wait_for(
                 scrape_tip_site(period, site, prior_seen),
                 timeout=_SITE_SCRAPE_TIMEOUT_SEC,
             )
         except asyncio.TimeoutError:
-            item = {
+            return {
                 "site": site.code,
                 "name": site.name,
                 "saved": 0,
@@ -380,14 +380,39 @@ async def sync_tips(period: int) -> dict[str, Any]:
                 "fail_reason": "timeout",
                 "fail_detail": f"单站超过 {_SITE_SCRAPE_TIMEOUT_SEC}s",
             }
+
+
+async def sync_tips(period: int) -> dict[str, Any]:
+    """多站并行抓完后再统一替换。没抓到的站保留上次名单，避免一次超时让分数跳动。
+
+    并发上限 `_TIP_SCRAPE_CONCURRENCY`（默认 5）；单站仍 75s。
+    开奖前 21:00–21:20 再点「刷新分析」可补齐晚出名单。
+    """
+    prior_seen = list_tip_first_seen(period)
+    prior_sites = {str(tip.get("site_code") or "") for tip in list_tips(period)}
+    sites = enabled_tip_sites()
+    sem = asyncio.Semaphore(_TIP_SCRAPE_CONCURRENCY)
+    scraped = await asyncio.gather(
+        *[_scrape_site_bounded(period, site, prior_seen, sem) for site in sites]
+    )
+
+    results: dict[str, Any] = {
+        "period": period,
+        "sites": [],
+        "concurrency": _TIP_SCRAPE_CONCURRENCY,
+        "site_timeout_sec": _SITE_SCRAPE_TIMEOUT_SEC,
+    }
+    fresh: dict[str, list[dict[str, Any]]] = {}
+    for item in scraped:
         rows = item.pop("rows")
-        had_prior = site.code in prior_sites
+        code = str(item["site"])
+        had_prior = code in prior_sites
         if rows:
-            fresh[site.code] = rows
-            status = record_site_scrape(site.code, ok=True, period=period)
+            fresh[code] = rows
+            status = record_site_scrape(code, ok=True, period=period)
         else:
             status = record_site_scrape(
-                site.code,
+                code,
                 ok=False,
                 period=period,
                 reason=item.get("fail_reason"),
@@ -399,7 +424,7 @@ async def sync_tips(period: int) -> dict[str, Any]:
         item["reuse"] = status.get("reuse")
         item["counted"] = status.get("counted")
         results["sites"].append(item)
-        results[site.code] = item
+        results[code] = item
     replace_site_tips(period, fresh)
     results["saved_total"] = sum(len(rows) for rows in fresh.values())
     results["kept_sites"] = [s["site"] for s in results["sites"] if not s["saved"]]

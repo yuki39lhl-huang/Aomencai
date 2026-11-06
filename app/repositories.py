@@ -192,6 +192,21 @@ def ensure_site_scrape_table() -> None:
             )
 
 
+# 晚出名单常见：无期号/没有名单，告警门槛更高，避免开奖前误报
+_SOFT_SCRAPE_REASONS = frozenset({"no_period", "no_list"})
+_HARD_ALERT_STREAK = 3
+_SOFT_ALERT_STREAK = 5
+
+
+def scrape_failure_is_alert(fail_streak: int, reason: str | None) -> bool:
+    """硬失败（超时/线路页等）连 3 期告警；晚出类连 5 期才告警。"""
+    if fail_streak <= 0:
+        return False
+    if (reason or "") in _SOFT_SCRAPE_REASONS:
+        return fail_streak >= _SOFT_ALERT_STREAK
+    return fail_streak >= _HARD_ALERT_STREAK
+
+
 def record_site_scrape(
     site_code: str,
     *,
@@ -278,7 +293,7 @@ def record_site_scrape(
         "site_code": site_code,
         "fail_streak": streak,
         "reason": saved_reason,
-        "alert": streak >= 3,
+        "alert": scrape_failure_is_alert(streak, saved_reason),
         "counted": counted if not ok else False,
         "reuse": reuse,
     }
@@ -291,11 +306,17 @@ def list_site_alerts() -> list[dict[str, Any]]:
             """
             SELECT site_code, fail_streak, last_reason, last_detail, last_period, last_fail_period, updated_at
             FROM site_scrape_status
-            WHERE fail_streak >= 3
+            WHERE fail_streak >= %s
             ORDER BY fail_streak DESC, site_code
-            """
+            """,
+            (_HARD_ALERT_STREAK,),
         )
-        return list(cur.fetchall())
+        rows = list(cur.fetchall())
+    return [
+        row
+        for row in rows
+        if scrape_failure_is_alert(int(row.get("fail_streak") or 0), row.get("last_reason"))
+    ]
 
 
 def list_locked_bao_missing_lian() -> list[dict[str, Any]]:
@@ -657,7 +678,8 @@ def list_recent_recommend_hits(periods: int = 20) -> list[dict[str, Any]]:
         cur.execute(
             """
             SELECT r.period, r.play_type, r.zodiac, r.zodiacs,
-                   r.hit, r.score, d.special_zodiac, d.special
+                   r.hit, r.score, d.special_zodiac, d.special,
+                   d.n1, d.n2, d.n3, d.n4, d.n5, d.n6, d.draw_date
             FROM recommend_log r
             INNER JOIN (
               SELECT DISTINCT period FROM recommend_log ORDER BY period DESC LIMIT %s

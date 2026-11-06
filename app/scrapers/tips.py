@@ -49,6 +49,13 @@ _ROUTE_MARKS = ("点击进入", "进入网站", "立即进入", "线路选择", 
 _XIAO_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 _ZODIAC_CHARS = set("鼠牛虎兔龙蛇马羊猴鸡狗猪")
 _LABEL_RE = re.compile(r"([一二三四五六七八九])肖")
+# 明文绝杀：绝杀一肖：猴 / 综合绝杀：羊 / 表格式「绝杀\t鸡肖」
+_KILL_LABEL_RE = re.compile(
+    r"(?:绝杀一肖|综合绝杀)\s*[:：]\s*([鼠牛虎兔龙蛇马羊猴鸡狗猪])"
+)
+_KILL_TABLE_RE = re.compile(
+    r"绝杀\s*([鼠牛虎兔龙蛇马羊猴鸡狗猪])肖?(?=[.\s开]|$)"
+)
 
 
 def _chunks_for_period(text: str, period: int) -> list[str]:
@@ -215,16 +222,59 @@ def is_connection_fetch_error(exc: BaseException) -> bool:
     return classify_fetch_error(exc) == "connection_closed"
 
 
+def parse_kill_xiao(text: str) -> list[dict[str, Any]]:
+    """只认明文绝杀单肖，不解析笑话/玄机图。tip_type=绝杀，play_scope=te_ma。"""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    body = text or ""
+    for cre in (_KILL_LABEL_RE, _KILL_TABLE_RE):
+        for m in cre.finditer(body):
+            zodiac = m.group(1)
+            if zodiac in seen:
+                continue
+            seen.add(zodiac)
+            raw = body[m.start() : m.end() + 8][:200]
+            out.append(
+                {
+                    "strategy": "kill_line",
+                    "raw": raw,
+                    "zodiacs": [zodiac],
+                    "tip_type": "绝杀",
+                    "count": 1,
+                    "play_scope": "te_ma",
+                }
+            )
+    return out
+
+
+def _period_kill_scope(text: str, period: int) -> str:
+    """绝杀对照表常在页尾，不截前 12 段，把当期全部块拼起来。"""
+    chunks = _chunks_for_period(text, period)
+    if chunks:
+        return "\n".join(chunks)
+    return _scope_for_period(text, period)
+
+
 def extract_candidates(text: str, period: int) -> list[dict[str, Any]]:
-    """当期段落里的肖名单，阶梯合并后入库。"""
+    """当期段落：包肖/短名单阶梯 + 明文绝杀（特码旁路，不进包肖分）。"""
     scope = _scope_for_period(text, period)
     if not scope:
         return []
-    return select_ladder_tips(parse_xiao_runs(scope))
+    ladder = select_ladder_tips(parse_xiao_runs(scope))
+    kills = parse_kill_xiao(_period_kill_scope(text, period))
+    return ladder + kills
+
+
+def extract_kill_only(text: str, period: int) -> list[dict[str, Any]]:
+    """特码专用页：只抽绝杀，不跑包肖阶梯。"""
+    scope = _period_kill_scope(text, period) or (text or "")
+    return parse_kill_xiao(scope)
 
 
 def play_scope_for_tip(raw: str, tip_type: str | None, zodiacs: list[str]) -> str | None:
-    """一肖到三肖归特码，四肖到九肖归包肖。个数对不上的不参与。"""
+    """一肖到三肖归特码，四肖到九肖归包肖。绝杀固定特码。个数对不上的不参与。"""
+    if (tip_type or "") == "绝杀":
+        return "te_ma"
     parsed = parse_xiao_runs(raw or "")
     if len(parsed) == 1:
         return scope_for_xiao(int(parsed[0]["count"]))
@@ -236,22 +286,89 @@ def play_scope_for_tip(raw: str, tip_type: str | None, zodiacs: list[str]) -> st
 
 
 def collapse_site_tips(tips: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """按站点把已入库原文重新收成阶梯各一档。"""
+    """按站点把已入库原文重新收成阶梯各一档；绝杀明文单独保留。"""
     grouped: dict[str, list[dict[str, Any]]] = {}
+    kills: list[dict[str, Any]] = []
     for tip in tips:
-        raw = str(tip.get("raw_text") or tip.get("raw") or "")
         site = str(tip.get("site_code") or "")
+        tip_type = str(tip.get("tip_type") or "")
+        zodiacs = tip.get("parsed_zodiacs") or tip.get("zodiacs") or []
+        if isinstance(zodiacs, str):
+            try:
+                import json
+
+                zodiacs = json.loads(zodiacs)
+            except Exception:
+                zodiacs = []
+        if tip_type == "绝杀" or tip.get("strategy") == "kill_line":
+            zs = [z for z in list(zodiacs) if z in _ZODIAC_CHARS]
+            if len(zs) == 1:
+                kills.append(
+                    {
+                        "site_code": site,
+                        "zodiacs": zs,
+                        "tip_type": "绝杀",
+                        "count": 1,
+                        "play_scope": "te_ma",
+                        "strategy": "kill_line",
+                        "raw": tip.get("raw_text") or tip.get("raw") or "",
+                    }
+                )
+            continue
+        raw = str(tip.get("raw_text") or tip.get("raw") or "")
         grouped.setdefault(site, []).extend(parse_xiao_runs(raw))
+        # 原文里若仍有绝杀明文，一并收出
+        for item in parse_kill_xiao(raw):
+            kills.append({**item, "site_code": site})
     kept: list[dict[str, Any]] = []
     for site, items in grouped.items():
         for item in select_ladder_tips(items):
             kept.append({**item, "site_code": site})
+    seen_kill: set[tuple[str, str]] = set()
+    for item in kills:
+        key = (str(item.get("site_code") or ""), (item.get("zodiacs") or [""])[0])
+        if key in seen_kill or not key[1]:
+            continue
+        seen_kill.add(key)
+        kept.append(item)
     return kept
 
 
 def contributing_tips(tips: list[dict[str, Any]], play_type: str) -> list[dict[str, Any]]:
-    """打分用的资料：各站阶梯收档后，只留该玩法的那一档。"""
-    return [tip for tip in collapse_site_tips(tips) if tip.get("play_scope") == play_type]
+    """打分用的资料：各站阶梯收档后，只留该玩法的那一档。绝杀永不进包肖。"""
+    out = []
+    for tip in collapse_site_tips(tips):
+        if tip.get("tip_type") == "绝杀" and play_type == "bao_xiao":
+            continue
+        if tip.get("play_scope") == play_type:
+            out.append(tip)
+    return out
+
+
+def _merge_tip_rows(
+    base: list[dict[str, Any]], extra: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """合并绝杀等到已有行；同站同玩法同 tip_type 同名单不重复。"""
+    keys = {
+        (
+            str(r.get("play_scope") or ""),
+            str(r.get("tip_type") or ""),
+            tuple(r.get("parsed_zodiacs") or r.get("zodiacs") or []),
+        )
+        for r in base
+    }
+    out = list(base)
+    for row in extra:
+        key = (
+            str(row.get("play_scope") or ""),
+            str(row.get("tip_type") or ""),
+            tuple(row.get("parsed_zodiacs") or row.get("zodiacs") or []),
+        )
+        if key in keys:
+            continue
+        keys.add(key)
+        out.append(row)
+    return out
 
 
 def _rows_from_candidates(
@@ -271,7 +388,13 @@ def _rows_from_candidates(
         scope = item.get("play_scope") or play_scope_for_tip(
             str(item.get("raw") or ""), item.get("tip_type"), zodiacs
         )
-        if scope not in per_scope or per_scope[scope] >= 8:
+        if scope not in per_scope:
+            continue
+        # 绝杀与普通短名单可并存，不占 te_ma 阶梯配额
+        if item.get("tip_type") == "绝杀":
+            picked.append({**item, "play_scope": "te_ma"})
+            continue
+        if per_scope[scope] >= 8:
             continue
         per_scope[scope] += 1
         picked.append({**item, "play_scope": scope})
@@ -342,6 +465,7 @@ async def scrape_tip_site(
 
     urls = all_tip_fetch_urls(site)
     tried_extra = False
+    fetched_urls: set[str] = set()
 
     i = 0
     while i < len(urls):
@@ -349,6 +473,7 @@ async def scrape_tip_site(
         i += 1
         try:
             text, connection_retried = await _fetch_text_retry_connection(url, prefer)
+            fetched_urls.add(url)
             candidates = extract_candidates(text, period)
             found, st = _rows_from_candidates(site.code, url, candidates, prior_seen)
             used.append(f"{url}#retried=1" if connection_retried else url)
@@ -376,12 +501,49 @@ async def scrape_tip_site(
             error_detail = f"{type(exc).__name__}: {exc}{suffix}"
             used.append(f"{url}#err:{error_detail}")
 
+    # 特码绝杀专用页：只抽绝杀明文，合并进 rows，不改已有包肖阶梯
+    kill_fail_detail = ""
+    for url in site.tema_tip_urls:
+        if url in fetched_urls:
+            continue
+        try:
+            text, connection_retried = await _fetch_text_retry_connection(url, prefer)
+            fetched_urls.add(url)
+            kills = extract_kill_only(text, period)
+            found, st = _rows_from_candidates(site.code, url, kills, prior_seen)
+            used.append(
+                (f"{url}#tema#retried=1" if connection_retried else f"{url}#tema")
+            )
+            for s in st:
+                if s not in strategies_used:
+                    strategies_used.append(s)
+            if found:
+                rows = _merge_tip_rows(rows, found)
+                empty_reason = None
+                error_reason = None
+            elif not rows:
+                empty_reason = classify_empty_page(text, period)
+                kill_fail_detail = empty_reason or "no_kill"
+        except Exception as exc:
+            reason = classify_fetch_error(exc)
+            retried = bool(getattr(exc, "_tip_connection_retried", False))
+            suffix = "; retried=1" if retried else ""
+            detail = f"{type(exc).__name__}: {exc}{suffix}"
+            used.append(f"{url}#tema#err:{detail}")
+            if not rows:
+                error_reason = reason
+                kill_fail_detail = detail
+
     if rows:
         fail_reason = None
+        error_detail = ""
     elif empty_reason:
         fail_reason = empty_reason
+        error_detail = kill_fail_detail or error_detail
     else:
         fail_reason = error_reason or "fetch_error"
+        if kill_fail_detail and not error_detail:
+            error_detail = kill_fail_detail
     return {
         "site": site.code,
         "name": site.name,
@@ -391,7 +553,8 @@ async def scrape_tip_site(
         "strategies": strategies_used,
         "note": site.note,
         "fail_reason": fail_reason,
-        "fail_detail": "" if rows else (error_detail if fail_reason == error_reason else ""),
+        "fail_detail": "" if rows else (error_detail if fail_reason == error_reason else error_detail),
+        "kill_tips": sum(1 for r in rows if r.get("tip_type") == "绝杀"),
     }
 
 
@@ -496,6 +659,8 @@ def tip_scores_for_period(
     weights = site_weights or {}
     scores = {z: 0.0 for z in ZODIAC_ORDER}
     for tip in contributing_tips(tips, play_type):
+        if tip.get("tip_type") == "绝杀" and play_type == "bao_xiao":
+            continue
         zodiacs = list(tip.get("zodiacs") or [])
         if not zodiacs:
             continue

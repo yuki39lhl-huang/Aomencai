@@ -13,7 +13,7 @@ from app.repositories import (
     list_tips_by_period,
     save_backtest_snapshot,
 )
-from app.scrapers.tips import contributing_tips, tip_scores_for_period
+from app.scrapers.tips import collapse_site_tips, contributing_tips, tip_scores_for_period
 from app.services.reconcile import site_weights_for_period
 from app.services.scoring import (
     _gap_component,
@@ -30,7 +30,7 @@ from app.sites import enabled_tip_sites
 _START = 40
 _DRAW_CLOCK = time(21, 32)
 # 规则名带上共识 tip 扫描，刷新分析时会重算对照；不写 recommend_log
-_RULE = "pre_draw_21_32_consensus_tip_scan"
+_RULE = "pre_draw_21_32_consensus_tip_scan_v2"
 # 共识实验：热度 0 / 0.05 × tip 0 / 0.1 / 0.15 / 0.2；资料只认至少这么多个启用站同推的肖
 _CONSENSUS_MIN_SITES = 2
 _CONSENSUS_VARIANTS: tuple[tuple[str, float, float, str], ...] = tuple(
@@ -188,6 +188,36 @@ def _all_hit(group: list[str], row: dict[str, Any]) -> int:
     return int(all(bao_xiao_hit(zodiac, row) for zodiac in group))
 
 
+def _kill_zodiac(tips: list[dict[str, Any]]) -> str | None:
+    """开奖前明文绝杀一肖（若有多条取第一条）。"""
+    for tip in collapse_site_tips(tips):
+        if tip.get("tip_type") != "绝杀":
+            continue
+        zodiacs = list(tip.get("zodiacs") or [])
+        if len(zodiacs) == 1 and zodiacs[0] in ZODIAC_ORDER:
+            return zodiacs[0]
+    return None
+
+
+def _tema_with_kill_boost(
+    omit: dict[str, int],
+    hot: dict[str, int],
+    kill_z: str,
+    *,
+    weight: float,
+) -> str:
+    """特码对照专用：遗漏+热度照旧，绝杀肖额外极低权。不改 settings，不写推荐。"""
+    center = settings.tema_omit_center
+    omit_n = _gap_component(omit, center=center, half_width=settings.tema_omit_half)
+    hot_n = _scaled_component(hot, min_lead=settings.score_min_lead, full_at=settings.tema_hot_full)
+    totals = {
+        z: settings.weight_omit * omit_n[z] + settings.weight_hot * hot_n[z]
+        for z in ZODIAC_ORDER
+    }
+    totals[kill_z] = totals.get(kill_z, 0.0) + weight
+    return max(ZODIAC_ORDER, key=lambda z: (totals[z], -abs(omit[z] - center), -ZODIAC_ORDER.index(z)))
+
+
 def _year_prior_note(by_year: list[dict[str, Any]], override: dict[str, dict[str, int]]) -> str:
     """线上已经改用当年肖。by_year 仍由调用方传入，句子里不再用它否决。"""
     del by_year
@@ -298,6 +328,15 @@ def run_walkforward() -> dict[str, Any] | None:
     bao_used = 0
     bao_skipped = 0
     tema_skipped = 0
+    # 特码绝杀对照（只输出，不改线上）：现行 vs 绝杀直荐 / 回避 / 极低权加分
+    kill_exp = {
+        "periods_with_kill": 0,
+        "current_hits": 0,
+        "kill_as_pick_hits": 0,
+        "kill_avoid_hits": 0,
+        "kill_boost_hits": 0,
+        "boost_weight": 0.05,
+    }
     lian = {
         kind: {size: {"hits": 0, "expected": 0.0} for size in (3, 5)}
         for kind in ("current", "year")
@@ -344,6 +383,22 @@ def run_walkforward() -> dict[str, Any] | None:
                 bao_ranked[0],
             ),
         }
+        kill_z = _kill_zodiac(tips)
+        if kill_z:
+            kill_exp["periods_with_kill"] += 1
+            tema_ranked = _current_ranked(
+                play="te_ma",
+                omit=omit_t,
+                hot=hot_t,
+                tip_raw={z: 0.0 for z in ZODIAC_ORDER},
+            )
+            current_t = tema_ranked[0]
+            avoid_t = next((z for z in tema_ranked if z != kill_z), current_t)
+            boost_t = _tema_with_kill_boost(omit_t, hot_t, kill_z, weight=0.05)
+            kill_exp["current_hits"] += int(current_t == special)
+            kill_exp["kill_as_pick_hits"] += int(kill_z == special)
+            kill_exp["kill_avoid_hits"] += int(avoid_t == special)
+            kill_exp["kill_boost_hits"] += int(boost_t == special)
         site_counts = _consensus_sites(bao_tips, enabled)
         no_sites = {z: 0 for z in ZODIAC_ORDER}
         has_tip_sites = any(site_counts.values())
@@ -543,6 +598,13 @@ def run_walkforward() -> dict[str, Any] | None:
             ],
             "note": tip_note,
         },
+        "tema_kill": {
+            **kill_exp,
+            "note": (
+                "特码绝杀对照只统计开奖前已有明文绝杀的期；"
+                "不写 recommend_log，线上特码权重仍为 0。"
+            ),
+        },
     }
 
 
@@ -556,6 +618,7 @@ def refresh_backtest_if_needed(latest_drawn_period: int) -> dict[str, Any]:
         and "lian" in current
         and "consensus" in current
         and "year_prior" in current
+        and "tema_kill" in current
     )
     if same_period and same_rule and complete:
         return {"updated": False, "snapshot": current}

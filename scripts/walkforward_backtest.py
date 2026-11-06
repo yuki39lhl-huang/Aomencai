@@ -75,6 +75,19 @@ def main() -> None:
             f"按名单长度/12 的期望 {tips['expected_hits']} 次"
         )
     print(tips["note"])
+    kill = snapshot.get("tema_kill") or {}
+    if kill:
+        kn = int(kill.get("periods_with_kill") or 0)
+        print()
+        print(f"特码绝杀对照（有明文绝杀 {kn} 期）")
+        if kn:
+            print(
+                f"  现行遗漏+热度 {_rate(kill.get('current_hits'), kn)} | "
+                f"绝杀直荐 {_rate(kill.get('kill_as_pick_hits'), kn)} | "
+                f"回避绝杀 {_rate(kill.get('kill_avoid_hits'), kn)} | "
+                f"极低权加分({kill.get('boost_weight')}) {_rate(kill.get('kill_boost_hits'), kn)}"
+            )
+        print(kill.get("note") or "")
     print()
     print(f"已写入 backtest_snapshot through_period={snapshot['through_period']}")
 

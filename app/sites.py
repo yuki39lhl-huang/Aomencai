@@ -19,6 +19,8 @@ class TipSite:
     name: str
     entry_urls: tuple[str, ...]
     tip_urls: tuple[str, ...] = ()
+    # 特码绝杀专用页（幽默猜测等）；不进包肖启用逻辑，只抽明文绝杀
+    tema_tip_urls: tuple[str, ...] = ()
     enabled: bool = True
     prefer_frames: bool = False
     # 主 URL 抽不到时再翻页内资料链；0 = 不翻，避免慢站把 75s 吃光
@@ -58,8 +60,10 @@ TIP_SITES: tuple[TipSite, ...] = (
         name="研究院",
         entry_urls=("https://zrnilcrofy.690333hi.app:3216/#dh1",),
         tip_urls=("https://zrnilcrofy.690333hi.app:3216/main.html",),
+        # 绝杀明文目前在 tip 同页「期:绝杀 鸡肖」表；幽默猜测页无稳定直链前不另开
+        tema_tip_urls=(),
         prefer_frames=True,
-        note="旧站，已验证可抽七肖/一肖",
+        note="包肖 tip=main.html；同页抽绝杀一肖明文，不进包肖打分",
     ),
     TipSite(
         code="dinggeshui",
